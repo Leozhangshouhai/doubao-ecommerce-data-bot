@@ -164,7 +164,7 @@ def yh(size, bold=False, color=None):
     return Font(name=YAHEI, size=size, bold=bold, color=color)
 
 
-def build_xlsx(rows_out, n, day, customer, out_path):
+def build_xlsx(rows_out, n, day, out_path):
     def title_row(ws, title, subtitle, last_col):
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
         ws.cell(1, 1, title).font = yh(16, True, C["title"])
@@ -191,10 +191,10 @@ def build_xlsx(rows_out, n, day, customer, out_path):
     ws = wb.active
     ws.title = "一眼看懂"
     title_row(ws, "重点关注商品 · 当日快照",
-              f"{customer}｜数据日期 {day}｜共 {len(rows_out)} 个 SKU｜口径 v1.4（上架供商）｜建议每天先看「今日必盯」再看全量", 6)
+              f"数据日期 {day}｜共 {len(rows_out)} 个 SKU｜口径 v1.4（inventory_daily_sale 上架供商）｜建议每天先看「今日必盯」再看全量", 6)
     ws.cell(4, 1, "按等级数量").font = yh(12, True)
     gname = {"A": "今日必盯 A", "B": "持续缺货 B", "C": "频发缺货 C", "D": "低销频缺 D"}
-    gdes = {"A": "当天售罄，优先处理", "B": "连续缺货，跟进催货", "C": "近月频繁售罄", "D": "低销频缺，按需关注"}
+    gdes = {"A": "当天售罄，优先处理", "B": "连续≥3天，跟进催货", "C": "近30天售罄>10天", "D": "同C规则，销量更低"}
     for i, g in enumerate("ABCD"):
         col = i + 1
         num = ws.cell(5, col, n[g])
@@ -207,11 +207,11 @@ def build_xlsx(rows_out, n, day, customer, out_path):
     ws.row_dimensions[5].height = 40
     ws.cell(9, 1, "怎么用（建议）").font = yh(12, True)
     notes = [
-        "1. 打开「今日必盯」sheet：按等级优先级排序，够采购当天盯。",
+        "1. 打开「今日必盯」sheet：按等级优先级排序（基线第 1 天仅 A 可出，B/C/D 待库存历史），够采购当天盯。",
         "2. 「全量名单」按优先级排序；颜色：红=A 橙=B 黄=C 灰=D。",
-        "3. 「连续缺货天 / 近30天售罄天」两列，比读长句更快（B/C/D 今日标「历史不足」）。",
+        "3. 看「连续缺货天 / 近30天售罄天」两列数字，比读长句入选原因更快（B/C/D 今日标「历史不足」）。",
         "4. D 类默认放全量表末尾；日常可不展开，需要时再筛供商。",
-        "5. 「建议动作」给操作指引，规则细节保留在「入选说明」列。",
+        "5. 「建议动作」给操作指引，规则细节仍保留在「入选说明」列。",
     ]
     for i, nt in enumerate(notes):
         r = 10 + i
@@ -273,7 +273,7 @@ def build_xlsx(rows_out, n, day, customer, out_path):
                f"共 {n['A']} 条｜口径 v1.4，基线第 1 天仅 A 可出，B/C/D 待库存历史｜筛选已开启",
                data_rows(["A"]))
     sheet_data("全量名单", "重点关注 · 全量名单（含 C/D）",
-               f"共 {len(rows_out)} 条｜按等级 A→D，同级按月销降序｜筛选已开启",
+               f"共 {len(rows_out)} 条｜按等级 A→D，同级按严重程度降序｜筛选已开启",
                data_rows(None))
     wb.save(out_path)
     return out_path
@@ -291,7 +291,6 @@ def main():
     so = cfg["caliber"]["soldout"]
     flow_cats = so["flow_cats"]
     grade_th = {"流通": so["grade"]["flow"], "非流通": so["grade"]["non_flow"]}
-    customer = cfg.get("customer", "CUSTOMER")
 
     db = DB(cfg)
     db.connect()
@@ -390,7 +389,7 @@ def main():
         json_path = os.path.join(args.outdir, f"qpwy_卖断货_{day.replace('-', '')}.json")
         json.dump(result, open(json_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         xlsx_path = os.path.join(args.outdir, f"03-卖断货-重点关注商品_当日快照_{day.replace('-', '')}.xlsx")
-        build_xlsx(rows_out, n, day, customer, xlsx_path)
+        build_xlsx(rows_out, n, day, xlsx_path)
 
         print(f"[7/7] 完成：售罄 {len(rows_out)}（A{n['A']}/B{n['B']}/C{n['C']}/D{n['D']}）耗时 {dt['elapsed_s']}s")
         print("JSON:", json_path)
