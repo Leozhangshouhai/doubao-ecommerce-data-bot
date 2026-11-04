@@ -129,6 +129,12 @@ def main():
     info = {"customer": cfg["customer"], "config_path": path}
     if check_conn:
         info.update(conn_self_check(cfg))
+        # 自检失败项必须提升为错误（ok=false），让老板一眼看到"哪一步错了"；
+        # 禁止静默降级、禁止尝试环境内其他凭据重试
+        fails = [f"{k}: {v}" for k, v in info.items()
+                 if "失败" in str(v) or "不可达" in str(v) or "跳过" in str(v)]
+        if fails:
+            finish(fails)
 
     print(json.dumps({"ok": True, "errors": [], "info": info}, ensure_ascii=False, default=str))
 
