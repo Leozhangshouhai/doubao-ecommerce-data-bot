@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+QPWY机器人 · 卖断货报表生成器（配置驱动版 v1.1）
+
+读取 ecommerce_bot.yaml（连接凭据 + 口径 + 表名），只读生成卖断货报表：
+- 目标日 = MAX(snapshot_date)；也可传参数指定
+- 口径 v1.4 固化：售罄 = 上架供商行 is_sold_out=1（total_qty<1），不读其他供商库存
+  · 月销 = order_detail.price×quantity（order_code 关联 order_head，order_time=Unix 时间戳，valid=1）
+  · 大分类 = 类目名 ∈ caliber.soldout.flow_cats → 流通，其余非流通（严禁自拟类目规则）
+  · 等级 = 最高自然月销 × 分档阈值（流通 A>1万/B1千~1万/C500~1千；非流通 A>2千/B1千~2千/C500~1千）
+- 输出：JSON（全量名单）+ XLSX（模板样式契约：微软雅黑/A红B橙C黄D灰/一眼看懂4色块/10列明细/auto_filter）
+
+用法：
+  python3 report_soldout.py --config /path/ecommerce_bot.yaml [--date 2026-11-03] [--outdir /path/out]
+
+只执行 SELECT，不修改任何数据。
+"""
+import json, os, sys, socket, threading, time, datetime, argparse
+import yaml, paramiko, pymysql
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+
+def load_cfg(path):
+    with open(path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    return cfg
+
+
+# ---------- 隧道（jump 模式动态建双向端口转发） ----------
+def pump(s, d):
+    try:
+        while True:
+            x = s.recv(65536)
+            if not x:
+                break
+            d.sendall(x)
+    except Exception:
+        pass
+    try:
+        d.close()
+    except Exception:
+        pass
+
+
+def bridge(lp, rh, rp, t):
+    def h(c):
+        try:
+            ch = t.open_channel("direct-tcpip", (rh, rp), c.getpeername())
+        except Exception:
+            c.close()
+            return
+        threading.Thread(target=pump, args=(ch, c), daemon=True).start()
+        pump(c, ch)
+        try:
+            ch.close()
+        except Exception:
+            pass
+        try:
+            c.close()
+        except Exception:
+            pass
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", lp))
+    srv.listen(16)
+    while True:
+        c, _ = srv.accept()
+        threading.Thread(target=h, args=(c,), daemon=True).start()
+
+
+class DB:
+    """配置驱动连接：jump=动态隧道，direct=直连"""
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.conn = cfg["conn"]
+        self.db = cfg["db"]
+        self.tables = cfg["tables"]
+        self.tunnel_ports = {}
+        if self.conn.get("tunnel"):
+            self.tunnel_ports = {
+                "order": self.conn["tunnel"].get("order_port", 13307),
+                "goods": self.conn["tunnel"].get("goods_port", 13306),
+            }
+        self.cli = None
+
+    def _port(self, kind):
+        # jump：本地隧道端口（缺省 13307/13306）；direct：远端端口
+        if self.conn["mode"] == "jump":
+            return self.tunnel_ports.get(kind, 13307 if kind == "order" else 13306)
+        return int(self.conn["direct"].get(kind + "_port", 3306))
+
+    def _host(self, kind):
+        if self.conn["mode"] == "jump":
+            return "127.0.0.1"
+        return self.conn["direct"].get(kind + "_host", "127.0.0.1")
+
+    def connect(self):
+        if self.conn["mode"] == "jump":
+            cli = paramiko.SSHClient()
+            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            cli.connect(self.conn["jump_host"], username=self.conn["jump_user"],
+                        password=self.conn["jump_password"], timeout=25)
+            t = cli.get_transport()
+            targets = self.conn["targets"]
+            for kind in ("order", "goods"):
+                tg = targets[kind]
+                threading.Thread(target=bridge,
+                                 args=(self._port(kind), tg["host"], tg["port"], t), daemon=True).start()
+                time.sleep(0.4)
+            self.cli = cli
+
+    def q(self, kind, sql):
+        conn = pymysql.connect(host=self._host(kind), port=self._port(kind),
+                               user=self.db["user"], password=self.db["password"],
+                               connect_timeout=15, charset="utf8mb4")
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+        conn.close()
+        return cols, rows
+
+    def close(self):
+        if self.cli:
+            try:
+                self.cli.close()
+            except Exception:
+                pass
+
+
+# ---------- 等级 ----------
+def grade_of(max_amt, flow, th):
+    if max_amt > th[flow]["A"]:
+        return "A"
+    if max_amt >= th[flow]["B"]:
+        return "B"
+    if max_amt >= th[flow]["C"]:
+        return "C"
+    return "D"
+
+
+# ---------- 模板样式契约 ----------
+YAHEI = "Microsoft YaHei"
+C = {"title": "111827", "subtitle": "6B7280", "hdr": "1F2937",
+     "A_d": "DC2626", "A_l": "FEE2E2", "A_t": "B91C1C",
+     "B_d": "C2410C", "B_l": "FFEDD5", "B_t": "C2410C",
+     "C_d": "A16207", "C_l": "FEF9C3", "C_t": "A16207",
+     "D_d": "4B5563", "D_l": "F3F4F6", "D_t": "4B5563"}
+PRI = {"A": "今日必盯", "B": "持续缺货", "C": "频发缺货", "D": "低销频缺"}
+ACT = {"A": "当天缺货，优先补货/催供", "B": "连续缺货，跟进到货与替代",
+       "C": "近月频繁售罄，评估备货策略", "D": "低销频缺，按需关注"}
+
+
+def deep(g): return C[g + "_d"]
+def light(g): return C[g + "_l"]
+def tone(g): return C[g + "_t"]
+
+
+def yh(size, bold=False, color=None):
+    return Font(name=YAHEI, size=size, bold=bold, color=color)
+
+
+def build_xlsx(rows_out, n, day, customer, out_path):
+    def title_row(ws, title, subtitle, last_col):
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+        ws.cell(1, 1, title).font = yh(16, True, C["title"])
+        ws.row_dimensions[1].height = 28
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_col)
+        ws.cell(2, 1, subtitle).font = yh(10, False, C["subtitle"])
+
+    def hdr_row(ws, headers, row=4):
+        for j, h in enumerate(headers, 1):
+            c = ws.cell(row, j, h)
+            c.fill = PatternFill("solid", fgColor=C["hdr"])
+            c.font = yh(11, True, "FFFFFF")
+            c.alignment = Alignment(horizontal="center", vertical="center")
+
+    def grade_style(ws, r, g):
+        a = ws.cell(r, 1, PRI[g])
+        a.fill = PatternFill("solid", fgColor=deep(g)); a.font = yh(10, True, "FFFFFF")
+        a.alignment = Alignment(horizontal="center", vertical="center")
+        b = ws.cell(r, 2, g)
+        b.fill = PatternFill("solid", fgColor=light(g)); b.font = yh(10, True, tone(g))
+        b.alignment = Alignment(horizontal="center", vertical="center")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "一眼看懂"
+    title_row(ws, "重点关注商品 · 当日快照",
+              f"{customer}｜数据日期 {day}｜共 {len(rows_out)} 个 SKU｜口径 v1.4（上架供商）｜建议每天先看「今日必盯」再看全量", 6)
+    ws.cell(4, 1, "按等级数量").font = yh(12, True)
+    gname = {"A": "今日必盯 A", "B": "持续缺货 B", "C": "频发缺货 C", "D": "低销频缺 D"}
+    gdes = {"A": "当天售罄，优先处理", "B": "连续缺货，跟进催货", "C": "近月频繁售罄", "D": "低销频缺，按需关注"}
+    for i, g in enumerate("ABCD"):
+        col = i + 1
+        num = ws.cell(5, col, n[g])
+        num.fill = PatternFill("solid", fgColor=light(g)); num.font = yh(22, True, tone(g))
+        num.alignment = Alignment(horizontal="center", vertical="center")
+        lab = ws.cell(6, col, gname[g]); lab.font = yh(11, True, tone(g))
+        lab.alignment = Alignment(horizontal="center", vertical="center")
+        des = ws.cell(7, col, gdes[g]); des.font = yh(10, False, C["subtitle"])
+        des.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[5].height = 40
+    ws.cell(9, 1, "怎么用（建议）").font = yh(12, True)
+    notes = [
+        "1. 打开「今日必盯」sheet：按等级优先级排序，够采购当天盯。",
+        "2. 「全量名单」按优先级排序；颜色：红=A 橙=B 黄=C 灰=D。",
+        "3. 「连续缺货天 / 近30天售罄天」两列，比读长句更快（B/C/D 今日标「历史不足」）。",
+        "4. D 类默认放全量表末尾；日常可不展开，需要时再筛供商。",
+        "5. 「建议动作」给操作指引，规则细节保留在「入选说明」列。",
+    ]
+    for i, nt in enumerate(notes):
+        r = 10 + i
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
+        ws.cell(r, 1, nt).font = yh(10)
+    ws.cell(16, 1, "今日必盯供商 TOP（A+B）").font = yh(12, True)
+    hdr_row(ws, ["供商", "A+B 数量", "其中 A", "其中 B"], row=17)
+    ab = {}
+    for r in rows_out:
+        if r["grade"] in ("A", "B"):
+            p = r["provider_name"]
+            ab.setdefault(p, [0, 0, 0])
+            ab[p][0] += 1
+            ab[p][1 if r["grade"] == "A" else 2] += 1
+    top = sorted(ab.items(), key=lambda x: (-x[1][0], -x[1][1]))[:10]
+    for i, (pname, (tot, na, nb)) in enumerate(top):
+        r = 18 + i
+        ws.cell(r, 1, pname).font = yh(10)
+        for j, v in enumerate([tot, na, nb], 2):
+            c = ws.cell(r, j, v); c.font = yh(10)
+            c.alignment = Alignment(horizontal="center", vertical="center")
+    for j in range(1, 5):
+        ws.column_dimensions[chr(64 + j)].width = 22
+
+    cols10 = ["优先级", "等级", "商城商品码", "商品名称", "供商", "大分类", "连续缺货天", "近30天售罄天", "建议动作", "入选说明"]
+    widths10 = [12, 6, 12, 36, 28, 10, 12, 14, 26, 28]
+    history_insufficient = False  # 由调用方填入是否标「历史不足」
+
+    def data_rows(grades):
+        out = []
+        for r in rows_out:
+            if grades and r["grade"] not in grades:
+                continue
+            g = r["grade"]
+            out.append({"优先级": PRI[g], "等级": g, "商城商品码": str(r["item_id"]), "商品名称": r["name"],
+                        "供商": r["provider_name"], "大分类": r["flow"] + "品",
+                        "连续缺货天": 1 if g == "A" else "历史不足",
+                        "近30天售罄天": "—" if g == "A" else "历史不足",
+                        "建议动作": ACT[g],
+                        "入选说明": "A类·当天售罄" if g == "A" else f"{g}类·历史不足(基线第1天)"})
+        return out
+
+    def sheet_data(sname, title, subtitle, data):
+        ws = wb.create_sheet(sname)
+        title_row(ws, title, subtitle, 10)
+        hdr_row(ws, cols10)
+        for i, rec in enumerate(data):
+            r = 5 + i
+            grade_style(ws, r, rec["等级"])
+            for j in range(3, 11):
+                key = cols10[j - 1]
+                c = ws.cell(r, j, rec[key]); c.font = yh(10)
+                c.alignment = Alignment(vertical="center", wrap_text=(j in (4, 9, 10)))
+        for j, w in enumerate(widths10, 1):
+            ws.column_dimensions[chr(64 + j)].width = w
+        ws.auto_filter.ref = f"A4:J{max(4, 4 + len(data))}"
+
+    sheet_data("今日必盯", "今日必盯（A）· 建议每天只看这页",
+               f"共 {n['A']} 条｜口径 v1.4，基线第 1 天仅 A 可出，B/C/D 待库存历史｜筛选已开启",
+               data_rows(["A"]))
+    sheet_data("全量名单", "重点关注 · 全量名单（含 C/D）",
+               f"共 {len(rows_out)} 条｜按等级 A→D，同级按月销降序｜筛选已开启",
+               data_rows(None))
+    wb.save(out_path)
+    return out_path
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", required=True, help="ecommerce_bot.yaml 路径")
+    ap.add_argument("--date", default=None, help="目标日 YYYY-MM-DD（缺省=MAX(snapshot_date)）")
+    ap.add_argument("--outdir", default="./report_out", help="输出目录")
+    args = ap.parse_args()
+
+    cfg = load_cfg(args.config)
+    tables = cfg["tables"]
+    so = cfg["caliber"]["soldout"]
+    flow_cats = so["flow_cats"]
+    grade_th = {"流通": so["grade"]["flow"], "非流通": so["grade"]["non_flow"]}
+    customer = cfg.get("customer", "CUSTOMER")
+
+    db = DB(cfg)
+    db.connect()
+    t0 = time.time()
+    try:
+        # 目标日
+        if args.date:
+            day = args.date
+        else:
+            _, r = db.q("order", f"SELECT MAX(snapshot_date) FROM {tables['inventory_sale']} WHERE snapshot_date IS NOT NULL")
+            if not r or not r[0][0]:
+                raise SystemExit("[FATAL] inventory_sale 无任何快照，终止")
+            day = str(r[0][0])
+        year_start = day.split("-")[0] + "-01-01"
+        year_since = int(time.mktime(time.strptime(year_start, "%Y-%m-%d")))
+
+        # 1) 上架商品
+        _, items = db.q("goods", f"SELECT item_id, name, provider_id FROM {tables['item_sale']} WHERE status={so['on_sale_status']} AND sale_type={so['sale_type']}")
+        item_map = {int(r[0]): {"name": r[1], "provider_id": int(r[2] or 0)} for r in items}
+        print(f"[1/7] 上架商品(status={so['on_sale_status']}&sale_type={so['sale_type']}) {len(item_map)} 个")
+
+        # 2) 供商名称
+        _, prov = db.q("goods", f"SELECT provider_id, provider_name FROM {tables['item_provider']} WHERE status=1")
+        prov_name = {}
+        for r in prov:
+            nm = str(r[1] or "")
+            if "（云仓）" in nm:
+                nm = nm.replace("（云仓）", "")
+            prov_name[str(r[0])] = nm
+        print(f"[2/7] 供商名称 {len(prov_name)} 个")
+
+        # 3) 类目
+        _, g = db.q("goods", f"SELECT item_id, top_cat FROM {tables['goods']}")
+        topcat = {int(r[0]): r[1] for r in g}
+        ids = set(topcat.values())
+        ph = ",".join(["'%s'" % str(x) for x in ids if x])
+        _, cats = db.q("goods", f"SELECT id, name FROM {tables['item_category']} WHERE id IN ({ph})")
+        cat_name = {r[0]: r[1] for r in cats}
+        print(f"[3/7] 类目映射 {len(cat_name)} 个")
+
+        # 4) 当日快照前置校验
+        _, chk = db.q("order", f"SELECT COUNT(*) FROM {tables['inventory_sale']} WHERE snapshot_date='{day}'")
+        if not chk or chk[0][0] == 0:
+            raise SystemExit(f"[FATAL] {tables['inventory_sale']} 无 {day} 快照，终止")
+
+        # 5) 快照 + 售罄候选（上架供商行）
+        _, sale = db.q("order", f"SELECT item_id, provider_id, sellable_qty, warehouse_qty, total_qty, is_sold_out "
+                                f"FROM {tables['inventory_sale']} WHERE snapshot_date='{day}'")
+        sale_map = {(int(r[0]), int(r[1])): {"total": float(r[4] or 0), "sold": int(r[5] or 0)} for r in sale}
+        print(f"[4/7] inventory_sale {day} {len(sale_map)} 行")
+
+        soldout = []
+        for it, meta in item_map.items():
+            row = sale_map.get((it, meta["provider_id"]))
+            if row is not None and row["sold"]:
+                c = topcat.get(it)
+                fname = cat_name.get(str(c)) if c else "?"
+                flow = "流通" if fname in flow_cats else "非流通"
+                soldout.append({"item_id": it, "name": meta["name"], "provider_id": meta["provider_id"],
+                                "provider_name": prov_name.get(str(meta["provider_id"]), str(meta["provider_id"])),
+                                "fname": fname, "flow": flow, "total_inv": row["total"]})
+        print(f"[5/7] 当天售罄（上架供商 is_sold_out=1） {len(soldout)} 个")
+
+        # 6) 月销（order_code 关联、Unix 时间戳、valid=1）
+        monthly = {}
+        ids = [s["item_id"] for s in soldout]
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            ph = ",".join(["'%s'" % x for x in chunk])
+            sql = (f"SELECT od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time),'%Y-%m') ym, SUM(od.price*od.quantity) "
+                   f"FROM {tables['order_detail']} od JOIN {tables['order_head']} oh ON od.order_code=oh.order_code "
+                   f"WHERE od.sku_code IN ({ph}) AND oh.order_time >= {year_since} AND oh.valid=1 "
+                   f"GROUP BY od.sku_code, ym")
+            _, rows = db.q("order", sql)
+            for r in rows:
+                monthly.setdefault(r[0], {})[r[1]] = float(r[2])
+        print(f"[6/7] 月销聚合完成 {len(monthly)} 个有销售")
+
+        # 7) 组装
+        rows_out = []
+        for s in soldout:
+            ms = monthly.get(s["item_id"], {})
+            max_amt = max(ms.values()) if ms else 0.0
+            gr = grade_of(max_amt, s["flow"], grade_th)
+            rows_out.append({**s, "max_month_amt": max_amt, "max_month": max(ms, key=ms.get) if ms else "-", "grade": gr})
+        gorder = {"A": 0, "B": 1, "C": 2, "D": 3}
+        rows_out.sort(key=lambda x: (gorder[x["grade"]], -x["max_month_amt"]))
+        n = {"A": 0, "B": 0, "C": 0, "D": 0}
+        for r in rows_out:
+            n[r["grade"]] += 1
+
+        os.makedirs(args.outdir, exist_ok=True)
+        dt = {"date": day, "caliber": "v1.4", "soldout_total": len(soldout), "grade_dist": n,
+              "elapsed_s": round(time.time() - t0, 2)}
+        result = {"meta": dt, "rows": rows_out}
+        json_path = os.path.join(args.outdir, f"qpwy_卖断货_{day.replace('-', '')}.json")
+        json.dump(result, open(json_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        xlsx_path = os.path.join(args.outdir, f"03-卖断货-重点关注商品_当日快照_{day.replace('-', '')}.xlsx")
+        build_xlsx(rows_out, n, day, customer, xlsx_path)
+
+        print(f"[7/7] 完成：售罄 {len(rows_out)}（A{n['A']}/B{n['B']}/C{n['C']}/D{n['D']}）耗时 {dt['elapsed_s']}s")
+        print("JSON:", json_path)
+        print("XLSX:", xlsx_path)
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()
