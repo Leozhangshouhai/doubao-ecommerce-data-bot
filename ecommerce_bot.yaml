@@ -1,0 +1,81 @@
+# ============================================================
+# ECommerce Data Bot 配置文件（文件名固定：ecommerce_bot.yaml）
+# ------------------------------------------------------------
+# 用法：复制本文件到本地，填好下面所有 <占位符>，再上传给豆包。
+# 豆包会先校验本文件，校验通过后数据机器人即可使用。
+#
+# ⚠️ 安全提醒：
+#   本文件包含数据库连接凭据，请仅保存在你自己电脑 / 私密会话中，
+#   绝对不要上传到 GitHub / 网盘 / 转发给他人。
+# ============================================================
+
+# 客户 / 店铺标识（用于报表标题与日志）
+customer: QPWY
+
+# ---------- 连接配置（二选一：跳板机 或 直连） ----------
+conn:
+  # 方式 A：跳板机转发（推荐，只读账号在跳板机后）
+  mode: jump            # jump | direct
+  jump_host: <跳板机IP或域名>
+  jump_user: <跳板机用户名>
+  jump_password: <跳板机密码>
+  # 本地隧道端口映射（豆包侧已建立隧道时填写；无隧道留空）
+  tunnel:
+    order_port: 13307   # 订单库实例本地端口
+    goods_port: 13306   # 商品库实例本地端口
+  # 远端实例地址（跳板机后方的数据库实例；自检与运行时会动态建隧道）
+  targets:
+    order: { host: <订单库内网IP>, port: 3306 }   # 订单库实例（oms/atp 等）
+    goods: { host: <商品库内网IP>, port: 3306 }   # 商品库实例（goods_service/market 等）
+
+  # 方式 B：数据库直连（无跳板机时填写，并删掉方式 A 的字段）
+  # direct:
+  #   order_host: <订单库IP>
+  #   order_port: 3306
+  #   goods_host: <商品库IP>
+  #   goods_port: 3306
+
+# 数据库只读账号（只读权限，豆包只执行 SELECT）
+db:
+  user: <只读账号>
+  password: <只读密码>
+
+# ---------- 业务口径（卖断货 v1.4，已按 QPWY 样板固化） ----------
+caliber:
+  soldout:
+    on_sale_status: 2        # item_sale.status=2 上架
+    sale_type: 1             # item_sale.sale_type=1 定价销售
+    sold_out_rule: "total_qty < 1"   # 售罄判据
+    baseline_date: "2026-11-03"      # 连续售罄基线（第 1 天）
+    grade:
+      flow:                   # 流通品月销档（元）
+        A: 10000
+        B: 1000
+        C: 500
+      non_flow:              # 非流通品月销档（元）
+        A: 2000
+        B: 1000
+        C: 500
+    history_insufficient: true   # B/C/D 历史不足时标「历史不足」不填天数
+
+# ---------- 关键表（默认 QPWY 库名/表名，可覆写） ----------
+tables:
+  inventory_sale: "dmall_saas_atp.inventory_daily_sale"
+  inventory_detail: "dmall_saas_atp.inventory_daily_detail"
+  item_sale: "goods_service.item_sale"
+  item_provider: "goods_service.item_provider"
+  order_head: "oms.order_head"
+  order_detail: "oms.order_detail"
+  inventory_logic: "dmall_saas_atp.INVENTORY_LOGIC"
+
+# ---------- 已开通报表（其他报表建设中；其余需求走自定义输入） ----------
+reports:
+  enabled:
+    - soldout          # ① 卖断货（已开通）
+    # - hot_sale        # ② 爆卖（建设中）
+    # - popularity      # ③ 热度（建设中）
+    # - supply_short    # ④ 供货缺货（建设中）
+
+# ---------- 样式契约（默认引用 SKILL 内置模板，勿改） ----------
+style:
+  template: default     # default = 模板样式契约（微软雅黑 / 色板 / 布局）

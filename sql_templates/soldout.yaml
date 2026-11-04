@@ -1,0 +1,78 @@
+# 卖断货报表 · 参数化 SQL 模板（口径 v1.4）
+
+> 模板内 `{...}` 为参数，由 SKILL 从配置 + 用户条件注入。
+> 表名来自 `ecommerce_bot.yaml` 的 `tables` 段（可覆写）；默认值为 QPWY 样板已核对值。
+
+## 1. 目标日（最新快照）
+
+```sql
+SELECT MAX(snapshot_date) AS target_date
+FROM {inventory_sale}
+WHERE snapshot_date IS NOT NULL;
+```
+
+## 2. 上架供商匹配（item_sale 上架行）
+
+```sql
+SELECT item_id, provider_id
+FROM {item_sale}
+WHERE status = {on_sale_status}      -- 2=上架
+  AND sale_type = {sale_type};       -- 1=定价销售
+```
+
+## 3. 当日售罄（上架供商口径）
+
+```sql
+SELECT s.item_id, s.provider_id, s.sellable_qty, s.warehouse_qty, s.total_qty, s.is_sold_out
+FROM {inventory_sale} s
+JOIN (
+  SELECT item_id, provider_id
+  FROM {item_sale}
+  WHERE status = {on_sale_status} AND sale_type = {sale_type}
+) i
+  ON i.item_id = s.item_id AND i.provider_id = s.provider_id
+WHERE s.snapshot_date = '{target_date}'
+  AND s.is_sold_out = 1;            -- total_qty < 1
+```
+
+## 4. 月销（等级判据；窗口=统计日所在自然年）
+
+```sql
+SELECT od.sku_code AS item_id,
+       SUM(od.price * od.quantity) AS amt,
+       MONTH(oh.order_time) AS m
+FROM {order_detail} od
+JOIN {order_head} oh ON oh.order_id = od.order_id
+WHERE od.sku_code IN ({item_ids})            -- 由售罄名单注入
+  AND oh.order_time >= '{year}-01-01'
+  AND oh.order_time <  '{year}-01-01' + INTERVAL 1 YEAR
+GROUP BY od.sku_code, MONTH(oh.order_time);
+```
+
+## 5. 大分类（流通/非流通）
+
+```sql
+SELECT i.item_id, c.fname AS top_cat_name
+FROM {item_sale} i
+JOIN goods_service.goods g ON g.id = i.item_id
+JOIN goods_service.category c ON c.id = g.top_cat
+WHERE i.item_id IN ({item_ids});
+```
+> 分类→流通/非流通的映射表固化在 SKILL 配置 `caliber.soldout.grade` 口径说明中（QPWY：top_cat 食品饮料=流通，个人护理=非流通）。
+
+## 6. 供商名称
+
+```sql
+SELECT p.provider_id, p.provider_name
+FROM {item_provider} p
+WHERE p.status = 1
+  AND p.provider_id IN ({provider_ids});
+```
+> provider_id=0 查无行 → 标「未映射供应商」。
+
+## 等级与名单规则（固化，来自 v1.4）
+
+- 售罄 = `is_sold_out=1`（total_qty < 1），只取上架供商行；同商品其他供商库存不计
+- 等级 = 最高自然月销 × 大分类（流通 A>1万/B1千~1万/C500~1千/D<500；非流通 A>2千/B1千~2千/C500~1千/D<500）
+- A = 当天售罄 → 今日必盯（连续缺货天=1、近30天售罄天=—）；B/C/D = 基线起历史不足标「历史不足」，不填天数
+- 下架商品不进名单

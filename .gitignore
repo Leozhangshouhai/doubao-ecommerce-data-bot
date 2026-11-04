@@ -1,0 +1,10 @@
+# 安全：任何含真实凭据的配置文件不得入库
+# （占位符模板 ecommerce_bot.yaml 是唯一允许进仓库的同名文件）
+*.local.yaml
+*.conn.json
+conn.json
+.conn.json
+
+# 本地测试产物
+__pycache__/
+*.pyc
