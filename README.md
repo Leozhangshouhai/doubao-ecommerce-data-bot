@@ -14,6 +14,8 @@
 
 ## 快速开始
 
+> 📘 **给老板的傻瓜式操作手册**：[老板使用 SOP v1.0](docs/老板使用SOP.md)（第一步干什么、第二步填什么，一步步照着做即可）
+
 ### 1. 安装（给 AI 环境装 Skill）
 
 把本仓库 `SKILL.md` 及 `assets/scripts/sql_templates/references` 放入 Skill 根目录（如 `.skills/` 或 `.user_skills/`）。
