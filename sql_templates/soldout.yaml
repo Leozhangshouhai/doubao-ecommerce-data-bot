@@ -2,6 +2,8 @@
 
 > 模板内 `{...}` 为参数，由 SKILL 从配置 + 用户条件注入。
 > 表名来自 `ecommerce_bot.yaml` 的 `tables` 段（可覆写）；默认值为 QPWY 样板已核对值。
+> ⚠️ 真实库结构（QPWY 已核对）：供商名=market.item_provider；类目=goods_service.item_category
+> （goods.top_cat→item_category.id）；订单关联键=order_code；order_time=Unix 时间戳；明细只取 valid=1。
 
 ## 1. 目标日（最新快照）
 
@@ -35,30 +37,31 @@ WHERE s.snapshot_date = '{target_date}'
   AND s.is_sold_out = 1;            -- total_qty < 1
 ```
 
-## 4. 月销（等级判据；窗口=统计日所在自然年）
+## 4. 月销（等级判据；窗口=统计日所在自然年；order_code 关联 + Unix 时间戳 + valid=1）
 
 ```sql
 SELECT od.sku_code AS item_id,
        SUM(od.price * od.quantity) AS amt,
-       MONTH(oh.order_time) AS m
+       DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%Y-%m') AS m
 FROM {order_detail} od
-JOIN {order_head} oh ON oh.order_id = od.order_id
+JOIN {order_head} oh ON od.order_code = oh.order_code
 WHERE od.sku_code IN ({item_ids})            -- 由售罄名单注入
-  AND oh.order_time >= '{year}-01-01'
-  AND oh.order_time <  '{year}-01-01' + INTERVAL 1 YEAR
-GROUP BY od.sku_code, MONTH(oh.order_time);
+  AND oh.order_time >= {year_since}          -- 自然年起点的 Unix 时间戳（秒）
+  AND oh.valid = 1                           -- 排除拆单检查中间态（status=15, valid=0）
+GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%Y-%m');
 ```
 
 ## 5. 大分类（流通/非流通）
 
 ```sql
-SELECT i.item_id, c.fname AS top_cat_name
+SELECT i.item_id, c.name AS fname
 FROM {item_sale} i
-JOIN goods_service.goods g ON g.id = i.item_id
-JOIN goods_service.category c ON c.id = g.top_cat
+JOIN {goods} g ON g.id = i.item_id
+JOIN {item_category} c ON c.id = g.top_cat
 WHERE i.item_id IN ({item_ids});
 ```
-> 分类→流通/非流通的映射表固化在 SKILL 配置 `caliber.soldout.grade` 口径说明中（QPWY：top_cat 食品饮料=流通，个人护理=非流通）。
+> 流通判断：`fname ∈ caliber.soldout.flow_cats`（配置中的类目名称列表，精确匹配）→ 流通；否则非流通。
+> ⚠️ 严禁 AI 自拟类目规则（如"食品=流通"），一律以配置 flow_cats 为准。
 
 ## 6. 供商名称
 
@@ -68,7 +71,7 @@ FROM {item_provider} p
 WHERE p.status = 1
   AND p.provider_id IN ({provider_ids});
 ```
-> provider_id=0 查无行 → 标「未映射供应商」。
+> provider_id=0 或查无行 → 标「未映射供应商」。
 
 ## 等级与名单规则（固化，来自 v1.4）
 

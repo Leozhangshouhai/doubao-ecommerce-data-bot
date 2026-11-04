@@ -47,6 +47,13 @@ caliber:
     sale_type: 1             # item_sale.sale_type=1 定价销售
     sold_out_rule: "total_qty < 1"   # 售罄判据
     baseline_date: "2026-11-03"      # 连续售罄基线（第 1 天）
+    flow_cats:               # ⚠️ 大分类=流通的类目名（按 item_category.name 精确匹配；其余全部=非流通）
+                             # 与 QPWY 口径 v1.4 完全一致，非 QPWY 客户按自己品类改
+      - "饮料及水"
+      - "方便速食"
+      - "米面粮油"
+      - "牛奶乳品"
+      - "中外名酒"
     grade:
       flow:                   # 流通品月销档（元）
         A: 10000
@@ -58,15 +65,17 @@ caliber:
         C: 500
     history_insufficient: true   # B/C/D 历史不足时标「历史不足」不填天数
 
-# ---------- 关键表（默认 QPWY 库名/表名，可覆写） ----------
+# ---------- 关键表（默认 QPWY 已核对的库名/表名，可覆写） ----------
 tables:
   inventory_sale: "dmall_saas_atp.inventory_daily_sale"
   inventory_detail: "dmall_saas_atp.inventory_daily_detail"
   item_sale: "goods_service.item_sale"
-  item_provider: "goods_service.item_provider"
-  order_head: "oms.order_head"
-  order_detail: "oms.order_detail"
-  inventory_logic: "dmall_saas_atp.INVENTORY_LOGIC"
+  item_provider: "market.item_provider"        # 真实库在 market，非 goods_service
+  item_category: "goods_service.item_category" # 类目表（goods.top_cat → 本表 name）
+  goods: "goods_service.goods"
+  order_head: "dmall_saas_oms.order_head"      # 订单头（order_code 关联，order_time=Unix 时间戳）
+  order_detail: "dmall_saas_oms.order_detail"  # 订单明细（valid=1 有效行）
+  inventory_logic: "dmall_saas_atp.INVENTORY_LOGIC"   # 已弃用（v1.4 不再读），保留占位
 
 # ---------- 已开通报表（其他报表建设中；其余需求走自定义输入） ----------
 reports:

@@ -33,7 +33,7 @@ REQUIRED = {
 CONN_KEYS = {"mode": {"in": ["jump", "direct"]}}
 DB_KEYS = {"user": {"type": str, "nonempty": True}, "password": {"type": str, "nonempty": True}}
 TABLE_KEYS = ["inventory_sale", "item_sale", "order_head", "order_detail"]
-CALIBER_SOLDOUT_KEYS = ["on_sale_status", "sale_type", "sold_out_rule", "grade"]
+CALIBER_SOLDOUT_KEYS = ["on_sale_status", "sale_type", "sold_out_rule", "grade", "flow_cats"]
 
 
 def err(msg):

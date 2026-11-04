@@ -59,10 +59,9 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 1. 定位配置文件：**只认老板本次会话上传的附件 `ecommerce_bot.yaml`**；附件缺失 → **直接请老板上传**（明确说"请上传 ecommerce_bot.yaml 配置文件"，**不弹报表菜单、不出选择框**），**禁止从工作区/环境内其他路径寻找配置文件**（如历史遗留的 yaml、开发用凭据文件）
 2. 校验：`python3 scripts/load_config.py --check-conn`（仅用老板上传文件的凭据）→ 任一错误逐条列出（定位到字段），不裸抛、**不静默重试**
 3. 目标日：`SELECT MAX(snapshot_date) FROM inventory_sale`（同步 23:50 写当天 → 上午=昨天；为空则停跑并说明）
-4. 执行卖断货 SQL 模板（`sql_templates/soldout.yaml`，参数化：`{date}` `{on_sale_status}` 等）
-5. 等级与口径：按 `caliber.soldout`（v1.4：售罄=total_qty<1、只取上架供商、A 当天售罄、B/C/D 历史不足）
-6. 出报表：模板样式 XLSX（样式契约见 `references/style-contract.md`，微软雅黑/四色板/一眼看懂/10 列明细/筛选）+ JSON
-7. 回读校验（openpyxl：色板/表头/筛选/分布与 JSON 一致）→ 交付 + 一句话解读
+4. 执行生成器：`python3 scripts/report_soldout.py --config <老板上传的yaml路径> --outdir <工作目录>`（配置驱动版生成器，内含 v1.4 全链路：上架供商快照 → 售罄 → 月销 → 大分类 → 等级 → JSON+XLSX；目标日默认=MAX(snapshot_date)，可传 `--date`）
+5. 口径硬规则：售罄=`total_qty<1`、只取上架供商；**大分类 = 类目名 ∈ `caliber.soldout.flow_cats`（配置里显式列出，严禁 AI 自拟"食品=流通"类规则）**；A=当天售罄、B/C/D 标「历史不足」
+6. 出报表：生成器已按样式契约产出模板样式 XLSX（微软雅黑/四色板/一眼看懂/10 列明细/筛选）+ JSON → 回读校验（openpyxl：色板/表头/筛选/分布与 JSON 一致）→ 交付 + 一句话解读（售罄总数/A/B/C/D 分布/TOP5 供商）
 
 ## 安全约束（硬规则）
 
@@ -81,8 +80,7 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 |---|---|
 | `ecommerce_bot.yaml` | 配置模板（占位符版，固定文件名；老板复制填写后上传） |
 | `scripts/load_config.py` | 配置加载+校验+连接自检 |
-| `scripts/health_check.py` | （预留）就绪报告 |
-| `scripts/report_soldout.py` | （改造自 qpwy_soldout.py）卖断货报表生成 |
+| `scripts/report_soldout.py` | 卖断货报表生成器（配置驱动 v1.1，QPWY 真实库结构已核对） |
 | `sql_templates/soldout.yaml` | 卖断货参数化 SQL 模板 |
 | `references/style-contract.md` | 样式契约（微软雅黑/色板/布局/列宽） |
 | `README.md` | 安装/配置/使用（GitHub 首页） |
