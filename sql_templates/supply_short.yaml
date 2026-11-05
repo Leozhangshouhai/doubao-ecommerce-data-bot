@@ -1,0 +1,95 @@
+# 供货商快缺货 · 参数化 SQL（与卖断货隔离，不改 soldout.yaml）
+#
+# 售罄、上架、月销、大分类、供商名与卖断货同一口径。
+# 本表只多两件事：最近两个库存日都 is_sold_out=1 才计入；按供商打分取前 20。
+# 库存日不足 2 个时停，不要用 1 天凑数。
+# 不读 Redis，不读 INVENTORY_QUANTITY / INVENTORY_LOGIC。
+
+## 1. 最近两个库存日
+
+```sql
+SELECT DISTINCT snapshot_date
+FROM {inventory_sale}
+WHERE snapshot_date IS NOT NULL
+ORDER BY snapshot_date DESC
+LIMIT 2;
+```
+
+不足 2 行 → 停止，输出「历史不足」，不要出表。
+
+## 2. 上架商品（一行一个商城商品码 + 上架供商）
+
+```sql
+SELECT item_id, name, provider_id
+FROM {item_sale}
+WHERE status = {on_sale_status}
+  AND sale_type = {sale_type};
+```
+
+## 3. 这两天的售罄标记
+
+```sql
+SELECT snapshot_date, item_id, provider_id, is_sold_out
+FROM {inventory_sale}
+WHERE snapshot_date IN ('{older_date}', '{newer_date}');
+```
+
+上架供商不是 0：只认这个供商自己的行。
+
+上架供商是 0，按顺序判三种：
+  1. 供商 0 那一行还有货（is_sold_out=0）→ 整件没断，不计入、不归任何供商；
+  2. 供商 0 行两天都断，或快照里没有供商 0 行 → 才归到唯一一个两天都断的快照供商；
+  3. 两家以上都断 → 不猜，不归任何一家。
+任一天缺行、或任一天有货，都不计入。
+
+## 4. 月销（与卖断货 soldout.yaml 第 4 节同一条）
+
+```sql
+SELECT od.sku_code AS item_id,
+       SUM(od.price * od.quantity) AS amt,
+       DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%Y-%m') AS m
+FROM {order_detail} od
+JOIN {order_head} oh ON od.order_code = oh.order_code
+WHERE od.sku_code IN ({item_ids})
+  AND oh.order_time >= {year_since}
+  AND oh.valid = 1
+GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%Y-%m');
+```
+
+## 5. 大分类（与卖断货同一条）
+
+⚠️ 关联键必须是 `g.item_id = i.item_id`。`goods.id` 不是 `item_sale.item_id`
+（实测 goods.id 与商品码无关），写成 `g.id = i.item_id` 会把别的商品的类目套上来，
+流通/非流通判错，A 档门槛（1 万 / 2 千）跟着错。一个 item_id 在 goods 里可能多行，必须 `DISTINCT`。
+
+```sql
+SELECT DISTINCT i.item_id, g.top_cat
+FROM {item_sale} i
+JOIN {goods} g ON g.item_id = i.item_id
+WHERE i.status = {on_sale_status}
+  AND i.sale_type = {sale_type};
+```
+
+```sql
+SELECT id, name FROM {item_category};
+```
+
+映射链：`item_id → top_cat → item_category.id（字符串匹配）→ name`；
+流通 = name 属于 caliber.soldout.flow_cats。不要自拟「食品=流通」，也不要按前缀/模糊匹配类目。
+
+## 6. 供商名称
+
+```sql
+SELECT provider_id, provider_name
+FROM {item_provider}
+WHERE status = 1;
+```
+
+名称去掉「（云仓）」「(云仓）」。不要用 ofc_supplier。
+
+## 打分（固化）
+
+- 等级门槛用 caliber.soldout.grade，与卖断货 grade_of 相同：超过 A 线才是 A；达到 B 线、未超过 A 线是 B；达到 C 线、未到 B 线是 C；不到 C 线是 D。
+- 关注分 = 5×A + 2×B + 1×C + 0.3×D。权重可写在 caliber.supply_short.weight，缺省就是这四个数。
+- 只出关注分最高的 20 家（不足 20 家就全出）。售罄占比只展示，不拿来排序。
+- 第二页只放这 20 家里、连续两天都售罄的商品。

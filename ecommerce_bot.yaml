@@ -64,6 +64,16 @@ caliber:
         B: 1000
         C: 500
     history_insufficient: true   # B/C/D 历史不足时标「历史不足」不填天数
+  # ④ 供货缺货。没写这一节时，生成器用这里的默认：连续 2 天，5/2/1/0.3，前 20。
+  # 等级和流通品仍用上面的 soldout，不要在这里另写一套。
+  supply_short:
+    consecutive_days: 2
+    top_n: 20
+    weight:
+      A: 5
+      B: 2
+      C: 1
+      D: 0.3
 
 # ---------- 关键表（默认 QPWY 已核对的库名/表名，可覆写） ----------
 tables:
@@ -83,7 +93,7 @@ reports:
     - soldout          # ① 卖断货（已开通）
     # - hot_sale        # ② 爆卖（建设中）
     # - popularity      # ③ 热度（建设中）
-    # - supply_short    # ④ 供货缺货（建设中）
+    - supply_short     # ④ 供货缺货（已开通；老板开口再跑，不要加进卖断货定时）
 
 # ---------- 样式契约（默认引用 SKILL 内置模板，勿改） ----------
 style:
