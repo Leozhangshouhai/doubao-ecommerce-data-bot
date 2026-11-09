@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from report_hot_sale import DB   # 复用同一套跳板机隧道与只读查询封装
+from report_soldout import grade_of   # 复用 ① 的 A/B/C/D 等级口径，四张表统一
 
 
 def main():
@@ -48,10 +49,10 @@ def main():
     so = cfg["caliber"]["soldout"]
     pk = cfg["caliber"].get("predict", {})
     min_q7 = float(pk.get("min_q7", 10))
-    max_cov = float(pk.get("max_cover_days", 15))
+    max_cov = float(pk.get("max_cover_days", 20))
     lv = pk.get("levels", {}) or {}
-    LEVEL_TH = [("P0", float(lv.get("P0", 1))), ("P1", float(lv.get("P1", 2))),
-                ("P2", float(lv.get("P2", 5))), ("P3", float(lv.get("P3", 15)))]
+    LEVEL_TH = [("P0", float(lv.get("P0", 2))), ("P1", float(lv.get("P1", 5))),
+                ("P2", float(lv.get("P2", 10))), ("P3", float(lv.get("P3", 20)))]
     flow_cats = list(so["flow_cats"])
 
     os.makedirs(a.outdir, exist_ok=True)
@@ -70,6 +71,8 @@ def main():
         print("[1/6] 目标日 %s" % target)
 
         td = datetime.strptime(target, "%Y-%m-%d").date()
+        # 月销额起点：与 ① 一致，取目标年 1 月 1 日（用于 A/B/C/D 等级）
+        year_since = int(time.mktime(time.strptime(target.split("-")[0] + "-01-01", "%Y-%m-%d")))
         days = [str(td - timedelta(days=i)) for i in range(6, -1, -1)]
         print("[2/6] 近7日窗口 %s ~ %s" % (days[0], days[-1]))
 
@@ -172,9 +175,20 @@ GROUP BY item_id, provider_id"""
                 n_soldout += 1
                 continue
             pool += 1
-            d7 = q7 / 7.0
-            d3 = sum(series[-3:]) / 3.0
-            aggr = max(d3, d7)               # 保守：宁可早报
+            # 剔除「塌陷日」：快断的品最后 1~2 天因为没货卖不动，销量会掉到前 5 日均值的一半以下。
+            # 这部分若算进日均，会把日均拉低、可售天数拉长，越危险的品反而报得越晚。
+            base5 = series[:-2]
+            b5 = (sum(base5) / float(len(base5))) if base5 else 0.0
+            clean = [v for i2, v in enumerate(series)
+                     if not (i2 >= len(series) - 2 and b5 > 0 and v < b5 * 0.5)]
+            if len(clean) < 2:
+                clean = list(series)         # 样本太少不清洗，退回原始序列
+            nc = len(clean)
+            d7 = sum(clean) / float(nc)
+            d3 = sum(clean[-3:]) / float(min(3, nc))
+            fast = max(d3, d7)               # 卖得快口径 → 早断（保守）
+            slow = min(d3, d7)               # 卖得慢口径 → 晚断（乐观）
+            aggr = fast
             if aggr <= 0:
                 continue
             cov = stock / aggr
@@ -186,7 +200,10 @@ GROUP BY item_id, provider_id"""
                     level = name
                     break
             import math as _m
-            est_days = max(int(_m.ceil(cov)), 1)   # 0.09 天也算「今天就会断」，不写成 0
+            est_days = max(int(_m.ceil(cov)), 1)          # 早断（保守口径）
+            est_hi = max(int(_m.ceil(stock / slow)), 1) if slow > 0 else est_days
+            if est_hi < est_days:
+                est_hi = est_days
             c = topcat.get(iid)
             fname = cat_name.get(str(c)) if c else "?"
             notes = []
@@ -208,15 +225,43 @@ GROUP BY item_id, provider_id"""
                 "cover": round(cov, 2),
                 "level": level,
                 "est_out": str(td + timedelta(days=est_days)),
+                "est_out_min": str(td + timedelta(days=est_days)),
+                "est_out_max": str(td + timedelta(days=est_hi)),
+                "gap3": round(max(0.0, aggr * 3.0 - stock), 0),
                 "order_by": str(td + timedelta(days=max(est_days - 1, 1))),
                 "in_hot": iid in hot_ids,
                 "note": "；".join(notes),
                 "series": [round(v, 1) for v in series],
             })
 
+        # 7) A/B/C/D 等级（与 ① 卖断货完全同一口径：取历史月销额最大值）
+        grade_th = {"流通": so["grade"]["flow"], "非流通": so["grade"]["non_flow"]}
+        monthly = {}
+        gids = [str(r["item_id"]) for r in rows]
+        for gi in range(0, len(gids), 400):
+            ph = ",".join(["'%s'" % x for x in gids[gi:gi + 400]])
+            msql = ("SELECT od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time),'%%Y-%%m') ym, "
+                    "SUM(od.price*od.quantity) FROM {od} od JOIN {oh} oh ON od.order_code=oh.order_code "
+                    "WHERE od.sku_code IN (%s) AND oh.order_time >= %d AND oh.valid=1 "
+                    "GROUP BY od.sku_code, ym" % (ph, year_since))
+            for code, ym, amt in db.q("order", msql.format(od=tables["order_detail"],
+                                                           oh=tables["order_head"]), "月销额"):
+                monthly.setdefault(str(code), {})[ym] = float(amt or 0)
+        for r in rows:
+            ms = monthly.get(str(r["item_id"]), {})
+            r["max_month_amt"] = round(max(ms.values()), 2) if ms else 0.0
+            r["grade"] = grade_of(r["max_month_amt"], r["flow"], grade_th)
+        print("[7/7] ABCD 等级：%s" % {g: sum(1 for r in rows if r["grade"] == g)
+                                   for g in ("A", "B", "C", "D")})
+
         # 排序：按档位分段（P0→P3）；段内正常品在前、带异常标注的排末尾（不剔除）；再按可售天数升序、近7日降序
         lv_rank = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
-        rows.sort(key=lambda r: (lv_rank[r["level"]], 1 if r["note"] else 0, r["cover"], -r["q7"]))
+        # 段内排序：缺口件数 → 日均销量 → 可售天数。
+        # 说明：P0/P1 的缺口有区分度（3 天内真不够卖）；P2/P3 库存本来就撑得过 3 天，缺口恒为 0，
+        # 这时自动退化成按「日均销量」排——即热品强度，仍然是大品在前。
+        gorder = {"A": 0, "B": 1, "C": 2, "D": 3}
+        rows.sort(key=lambda r: (lv_rank[r["level"]], 1 if r["note"] else 0,
+                                 -r["gap3"], gorder[r["grade"]], -r["daily"], r["cover"]))
         cnt = {}
         for r in rows:
             cnt[r["level"]] = cnt.get(r["level"], 0) + 1

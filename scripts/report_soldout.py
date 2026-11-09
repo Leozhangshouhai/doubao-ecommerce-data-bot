@@ -179,6 +179,15 @@ def build_xlsx(rows_out, n, day, out_path):
             c.font = yh(11, True, "FFFFFF")
             c.alignment = Alignment(horizontal="center", vertical="center")
 
+    _GSIDE = Side(style="thin", color="E5E7EB")
+    _GRID = Border(left=_GSIDE, right=_GSIDE, top=_GSIDE, bottom=_GSIDE)
+
+    def paint_grid(ws, r1, r2, c1, c2):
+        """四张表统一细网格，只刷线不动填充与字体。"""
+        for rr in range(r1, r2 + 1):
+            for cc in range(c1, c2 + 1):
+                ws.cell(rr, cc).border = _GRID
+
     def grade_style(ws, r, g):
         a = ws.cell(r, 1, PRI[g])
         a.fill = PatternFill("solid", fgColor=deep(g)); a.font = yh(10, True, "FFFFFF")
@@ -233,6 +242,7 @@ def build_xlsx(rows_out, n, day, out_path):
         for j, v in enumerate([tot, na, nb], 2):
             c = ws.cell(r, j, v); c.font = yh(10)
             c.alignment = Alignment(horizontal="center", vertical="center")
+    paint_grid(ws, 17, 17 + len(top), 1, 4)
     for j in range(1, 5):
         ws.column_dimensions[chr(64 + j)].width = 22
 
@@ -288,6 +298,7 @@ def build_xlsx(rows_out, n, day, out_path):
                 c.alignment = Alignment(vertical="center", wrap_text=(j in (4, 9, 10)))
         for j, w in enumerate(widths10, 1):
             ws.column_dimensions[chr(64 + j)].width = w
+        paint_grid(ws, 4, max(4, 4 + len(data)), 1, 10)
         ws.auto_filter.ref = f"A4:J{max(4, 4 + len(data))}"
 
     sheet_data("今日必盯", "今日必盯（A）· 建议每天只看这页",

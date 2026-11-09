@@ -21,7 +21,7 @@ import os
 import sys
 
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.properties import PageSetupProperties
 
@@ -88,6 +88,18 @@ HEAD_ROW = 3
 DATA_ROW = 4
 
 
+# 统一网格：四张表共用同一组细线，避免各自风格打架
+_SIDE = Side(style="thin", color="E5E7EB")
+GRID = Border(left=_SIDE, right=_SIDE, top=_SIDE, bottom=_SIDE)
+
+
+def paint_grid(ws, r1, r2, c1, c2):
+    """给 r1..r2 行、c1..c2 列刷统一细网格（不碰填充与字体）。"""
+    for r in range(r1, r2 + 1):
+        for c in range(c1, c2 + 1):
+            ws.cell(r, c).border = GRID
+
+
 def _tier_index(labels, tier):
     try:
         return labels.index(tier)
@@ -140,6 +152,7 @@ def build_sheet(ws, title, subtitle, tier_labels, cols, widths, rows,
         ws.column_dimensions[get_column_letter(i + 1)].width = w
 
     last = HEAD_ROW + len(rows)
+    paint_grid(ws, HEAD_ROW, last, 1, n)      # 表头 + 数据统一细网格
     ws.auto_filter.ref = f"A{HEAD_ROW}:{last_col}{last}"
     ws.freeze_panes = f"A{DATA_ROW}"
     ws.sheet_view.showGridLines = False
