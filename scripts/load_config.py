@@ -48,7 +48,8 @@ def main():
         if a == "--path" and i + 1 < len(sys.argv):
             path = sys.argv[i + 1]
     if path is None:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", REQUIRED_FILE)
+        # 默认读固定配置路径（仓库内不再放模板文件）；老板上传后由 AI 落到这里
+        path = os.path.expanduser("~/.qpwy_bot/" + REQUIRED_FILE)
     path = os.path.abspath(path)
 
     errors = []

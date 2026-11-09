@@ -83,7 +83,7 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 ## 核心流程（触发「卖断货报表」时）
 
 1. 定位配置文件：**只认老板本次会话上传的附件 `ecommerce_bot.yaml`**；附件缺失 → **直接请老板上传**（明确说"请上传 ecommerce_bot.yaml 配置文件"，**不弹报表菜单、不出选择框**），**禁止从工作区/环境内其他路径寻找配置文件**（如历史遗留的 yaml、开发用凭据文件）
-2. 校验：`python3 scripts/load_config.py --check-conn`（仅用老板上传文件的凭据）→ 任一错误逐条列出（定位到字段），不裸抛、**不静默重试**
+2. 校验：`python3 scripts/load_config.py --path ~/.qpwy_bot/ecommerce_bot.yaml --check-conn`（仅用老板上传文件的凭据；不带 `--path` 时默认也读这个固定路径，仓库内不放任何 yaml）→ 任一错误逐条列出（定位到字段），不裸抛、**不静默重试**
 3. 目标日：`SELECT MAX(snapshot_date) FROM inventory_sale`（同步 23:50 写当天 → 上午=昨天；为空则停跑并说明）
 4. 执行生成器：`python3 scripts/report_soldout.py --config <老板上传的yaml路径> --outdir <工作目录>`（配置驱动版生成器，内含 v1.4 全链路：上架供商快照 → 售罄 → 月销 → 大分类 → 等级 → JSON+XLSX；目标日默认=MAX(snapshot_date)，可传 `--date`）
 5. 口径硬规则：售罄=`total_qty<1`、只取上架供商；**上架供商=0 且快照里没有「供商 0」行时 → 算售罄、供商留空，严禁改记成快照里的旧供商**（旧供商归属只用于 ④ 供货缺货表，绝不回流卖断货）；**大分类 = 类目名 ∈ `caliber.soldout.flow_cats`（配置里显式列出，严禁 AI 自拟"食品=流通"类规则）**；A=当天售罄、B/C/D 标「历史不足」
