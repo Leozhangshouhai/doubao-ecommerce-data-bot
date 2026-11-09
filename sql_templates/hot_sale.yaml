@@ -1,0 +1,121 @@
+# 爆卖双榜（报表 ②）· 参数化 SQL 模板（口径 v1.0，2026-11-08 冻结）
+
+> `{...}` 为参数，由 `scripts/report_hot_sale.py` 从配置 + 目标日注入。
+> 表名来自 `ecommerce_bot.yaml` 的 `tables` 段；默认值为 QPWY 样板已核对值。
+> 本表与卖断货（①）、供商缺货（④）**共用**上架条件、售罄口径、等级口径、flow_cats；不改它们的文件。
+> 出数后必须交给 `scripts/render_hot_sale.py` 出表，禁止另写生成器。
+>
+> ⚠️ 两个「断货」判定不要混用（这是固化时踩过的坑）：
+> - **当日售罄排除**（决定谁不进榜）= 报表①口径：上架供商=0 且快照无供商 0 行 → 算售罄。
+> - **逐日断货状态**（决定上涨天数、新品档）= 只看快照明确标记 `is_sold_out=1`；快照里没有这一行 → 视为有货，不虚报断货。
+>
+> ⚠️ 上架行必须过滤 `status=2 AND sale_type=1`。一个商品在 `item_sale` 里可能有多行（status=99 的停用行、status=3 的其他行），
+> **只认 status=2 的上架供商**；混入非上架供商的有货行会把「缺货→补货」的假信号判成真新品。
+
+## 1. 目标库存日
+
+```sql
+SELECT MAX(snapshot_date) FROM {inventory_sale} WHERE snapshot_date IS NOT NULL;
+```
+> 同步任务每天 23:50 写当天快照，上午运行最新日=昨天。窗口 = 目标日往前 7 个自然日（含目标日）。
+
+## 2. 窗口内库存快照可用日
+
+```sql
+SELECT DISTINCT snapshot_date
+FROM {inventory_sale}
+WHERE snapshot_date BETWEEN '{day_start}' AND '{target_date}'
+ORDER BY snapshot_date;
+```
+> 快照通常只有最近 5 天。缺的日子按「有货」处理，不要当成断货，也不要因此停跑。
+
+## 3. 上架商品（一行一个商城商品码 + 上架供商）
+
+```sql
+SELECT item_id, name, provider_id
+FROM {item_sale}
+WHERE status = {on_sale_status}      -- 2=上架
+  AND sale_type = {sale_type};       -- 1=定价销售
+```
+> 同一 `item_id` 可能有多个上架供商行，**全部保留**（去重后存成 pids），售罄判定时「任一供商行有货 → 整件未断」。
+
+## 4. 近 7 日逐日销量
+
+```sql
+SELECT od.sku_code AS item_id,
+       DATE(FROM_UNIXTIME(oh.order_time)) AS d,
+       SUM(od.quantity) AS q
+FROM {order_detail} od
+JOIN {order_head} oh ON od.order_code = oh.order_code
+WHERE oh.valid = 1
+  AND oh.order_time >= {window_start_ts}
+GROUP BY od.sku_code, DATE(FROM_UNIXTIME(oh.order_time));
+```
+> 关联键铁律：`order_detail.sku_code` = 商城商品码；`item_code` 是另一套内部编码，不可用。
+> `valid=1` 排除拆单检查中间态。`order_time` 是 Unix 秒。
+> ⚠️ SQL 用 f-string 拼，`DATE_FORMAT` 里写**单** `%Y`；用 `%` 格式化会吃掉 `%Y`，写 `%%Y` 会返回字面串使分组全空。
+
+## 5. 窗口内库存快照（断货判定 + 可售天数）
+
+```sql
+SELECT snapshot_date, item_id, provider_id, total_qty, is_sold_out
+FROM {inventory_sale}
+WHERE snapshot_date BETWEEN '{day_start}' AND '{target_date}';
+```
+> 可售天数 = 最新快照 `total_qty` ÷ 近 3 日日均（取当日有货的那个供商行）。
+> 断货日销量必为 0，因此天然不贡献「上涨天数」，也不满足「后 3 日连续」。
+
+## 6. 月销（库存价值档 / 等级）
+
+```sql
+SELECT od.sku_code AS item_id,
+       DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%Y-%m') AS m,
+       SUM(od.price * od.quantity) AS amt
+FROM {order_detail} od
+JOIN {order_head} oh ON od.order_code = oh.order_code
+WHERE oh.valid = 1
+  AND oh.order_time >= {year_since}
+GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%Y-%m');
+```
+> 每个商品取自然年内**最高一个月**的 `amt` 作为等级判据，与报表①同口径。
+> 流通 A>1万 / 非流通 A>2千；1000 整为 B、500 整为 C（等号归下一档）。
+
+## 7. 大分类（两步查，不要 JOIN）
+
+```sql
+SELECT item_id, top_cat FROM {goods};
+SELECT id, name FROM {item_category} WHERE id IN ({top_cat_ids});
+```
+> `goods.top_cat` 直接就是 `item_category.id`，分两步查。
+> 用 `JOIN` 写法在 QPWY 上返回 0 行（14286 个 id 的 IN 也会超限），必须先取 top_cat 再按 400 个一批查名称。
+> 流通判断：`fname ∈ caliber.soldout.flow_cats` 精确匹配；否则非流通。严禁 AI 自拟类目规则。
+
+## 8. 供商名称
+
+```sql
+SELECT provider_id, provider_name FROM {item_provider} WHERE status = 1 AND provider_id IN ({provider_ids});
+```
+> 查不到的供商 → 表内写「—」，备注列标「没有供商」（= 自营商品，见 SKILL.md「业务常识」第 2 条，不要改写成「自营」）。
+
+## 计算规则（固化，改这里必须同步 `scripts/report_hot_sale.py` 与 `references/style-contract.md`）
+
+**通用**
+- 加速比 = 近 3 日日均 ÷ 前 4 日日均，保留 2 位；前 4 日为 0 且有量 → 记「新增」（`acc=null`），不记无穷大
+- 上涨天数 = 相邻两天销量递增的次数（断货日销量为 0，天然不计）
+- 可售天数 = 当前库存 ÷ 近 3 日日均
+- 当日售罄的品不进任何榜
+
+**规模爆品**：近 7 日 ≥50 件 且 加速 ≥1.5 且 上涨 ≥3
+- 档位：爆款 ≥500 / 旺销 200~500 / 畅销 100~200 / 起量 50~100
+
+**速度爆品**：近 7 日 ≥10 件（**不设上限**）且 近 3 日日均 ≥5 且 加速 ≥3 且 上涨 ≥3 且 非单日尖峰 且 后 3 日连续有量
+- 档位：黑马 ≥10 倍 / 猛涨 5~10 倍 / 起势 3~5 倍
+- 剔尖峰：单日峰值 > 其余 6 日均值 5 倍且峰值 ≥10 件 → 视为团购/批发单，剔除
+- 允许同一品同时出现在规模榜与速度榜（两张表看的是不同维度）
+
+**新品档**：前 4 日销量 =0 且 有货未断 且 近 3 日日均 ≥5 且 后 3 日连续 且 末日不回吐（末日 ≥ max(第5日,第6日)×0.6）
+- **供给恢复型剔除**：前 2 个可验证库存日出现过断货 → 归「供给恢复型」，不进新品档
+  （典型：`[0,0,0,0,45,65,40]` 前 4 天其实是缺货，14 倍加速是假的）
+
+**备注列（异常原因）**：可售 >1000 天 → 「云仓 · 天数」（云仓=有货量大、无货即断，**是业务模式，不是数据错误**）；731~1000 天 → 库存偏高；
+单日峰值超其余 6 日均值 5 倍 → 含单日尖峰；供商为空 → 没有供商（自营商品）。一个品最多两条，按 云仓→尖峰→偏高→没有供商 排序。

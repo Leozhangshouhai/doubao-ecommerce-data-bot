@@ -191,10 +191,10 @@ def build_xlsx(rows_out, n, day, out_path):
     ws = wb.active
     ws.title = "一眼看懂"
     title_row(ws, "重点关注商品 · 当日快照",
-              f"数据日期 {day}｜共 {len(rows_out)} 个 SKU｜口径 v1.4（inventory_daily_sale 上架供商）｜建议每天先看「今日必盯」再看全量", 6)
+              f"数据日期 {day}｜共 {len(rows_out)} 个 SKU｜口径 v1.4（inventory_daily_sale 上架供商）", 6)
     ws.cell(4, 1, "按等级数量").font = yh(12, True)
     gname = {"A": "今日必盯 A", "B": "持续缺货 B", "C": "频发缺货 C", "D": "低销频缺 D"}
-    gdes = {"A": "当天售罄，优先处理", "B": "连续≥3天，跟进催货", "C": "近30天售罄>10天", "D": "同C规则，销量更低"}
+    gdes = {"A": "月销>1万", "B": "月销1000~1万", "C": "月销500~1000", "D": "月销<500"}
     for i, g in enumerate("ABCD"):
         col = i + 1
         num = ws.cell(5, col, n[g])
@@ -207,9 +207,9 @@ def build_xlsx(rows_out, n, day, out_path):
     ws.row_dimensions[5].height = 40
     ws.cell(9, 1, "怎么用（建议）").font = yh(12, True)
     notes = [
-        "1. 打开「今日必盯」sheet：按等级优先级排序（基线第 1 天仅 A 可出，B/C/D 待库存历史），够采购当天盯。",
-        "2. 「全量名单」按优先级排序；颜色：红=A 橙=B 黄=C 灰=D。",
-        "3. 看「连续缺货天 / 近30天售罄天」两列数字，比读长句入选原因更快（B/C/D 今日标「历史不足」）。",
+        "1. 等级按月销额分档：A 流通>1万/非流通>2千，B 1000+、C 500+、D<500；与缺货天数无关。",
+        "2. 「全量名单」按优先级排序，都是当日售罄的品；颜色：红=A 橙=B 黄=C 灰=D。",
+        "3. 缺货天数按快照逐日实算：数到最早快照日仍断→「历史数据不足」；30 天未满→「不满足（实N天）」。",
         "4. D 类默认放全量表末尾；日常可不展开，需要时再筛供商。",
         "5. 「建议动作」给操作指引，规则细节仍保留在「入选说明」列。",
     ]
@@ -222,7 +222,7 @@ def build_xlsx(rows_out, n, day, out_path):
     ab = {}
     for r in rows_out:
         if r["grade"] in ("A", "B"):
-            p = r["provider_name"]
+            p = r["provider_name"] or "没有供商"
             ab.setdefault(p, [0, 0, 0])
             ab[p][0] += 1
             ab[p][1 if r["grade"] == "A" else 2] += 1
@@ -237,7 +237,7 @@ def build_xlsx(rows_out, n, day, out_path):
         ws.column_dimensions[chr(64 + j)].width = 22
 
     cols10 = ["优先级", "等级", "商城商品码", "商品名称", "供商", "大分类", "连续缺货天", "近30天售罄天", "建议动作", "入选说明"]
-    widths10 = [12, 6, 12, 36, 28, 10, 12, 14, 26, 28]
+    widths10 = [12, 6, 12, 36, 28, 10, 15, 18, 26, 28]
     history_insufficient = False  # 由调用方填入是否标「历史不足」
 
     def data_rows(grades):
@@ -246,12 +246,33 @@ def build_xlsx(rows_out, n, day, out_path):
             if grades and r["grade"] not in grades:
                 continue
             g = r["grade"]
+            k = max(int(r.get("consec_days", 1)), 1)
+            capped = r.get("consec_capped", True)
+            st = r.get("s30_state", "none")
+            if st == "none":
+                s30_txt = "没有历史数据"
+            elif st == "short":
+                s30_txt = f"不满足（实{r.get('s30', 0)}天）"
+            else:
+                s30_txt = r.get("s30", 0)
+            if capped:
+                days_txt = "历史数据不足"
+                act = "连续缺货，历史数据不足，需人工确认"
+                why = f"{g}类·连续缺货（更早历史数据不足）"
+            elif k == 1:
+                days_txt = 1
+                act = "当天缺货，优先补货/催供"
+                why = f"{g}类·当天售罄"
+            else:
+                days_txt = k
+                act = f"连续缺货{k}天，优先补货/催供"
+                why = f"{g}类·连续缺货{k}天"
             out.append({"优先级": PRI[g], "等级": g, "商城商品码": str(r["item_id"]), "商品名称": r["name"],
-                        "供商": r["provider_name"], "大分类": r["flow"] + "品",
-                        "连续缺货天": 1 if g == "A" else "历史不足",
-                        "近30天售罄天": "—" if g == "A" else "历史不足",
-                        "建议动作": ACT[g],
-                        "入选说明": "A类·当天售罄" if g == "A" else f"{g}类·历史不足(基线第1天)"})
+                        "供商": r["provider_name"] or "没有供商", "大分类": r["flow"] + "品",
+                        "连续缺货天": days_txt,
+                        "近30天售罄天": s30_txt,
+                        "建议动作": act,
+                        "入选说明": why})
         return out
 
     def sheet_data(sname, title, subtitle, data):
@@ -342,17 +363,77 @@ def main():
         sale_map = {(int(r[0]), int(r[1])): {"total": float(r[4] or 0), "sold": int(r[5] or 0)} for r in sale}
         print(f"[4/7] inventory_sale {day} {len(sale_map)} 行")
 
+        # 售罄判据（v1.5）：上架供商行 is_sold_out=1；上架供商=0 且快照里没有供商 0 行
+        # 时算售罄、供商留空，不得改记成快照里的旧供商
         soldout = []
+        n_no_zero = 0
         for it, meta in item_map.items():
-            row = sale_map.get((it, meta["provider_id"]))
-            if row is not None and row["sold"]:
+            pid = meta["provider_id"]
+            row = sale_map.get((it, pid))
+            hit = row is not None and row["sold"]
+            if not hit and pid == 0 and row is None:
+                hit = True; n_no_zero += 1
+            if hit:
                 c = topcat.get(it)
                 fname = cat_name.get(str(c)) if c else "?"
                 flow = "流通" if fname in flow_cats else "非流通"
-                soldout.append({"item_id": it, "name": meta["name"], "provider_id": meta["provider_id"],
-                                "provider_name": prov_name.get(str(meta["provider_id"]), str(meta["provider_id"])),
-                                "fname": fname, "flow": flow, "total_inv": row["total"]})
-        print(f"[5/7] 当天售罄（上架供商 is_sold_out=1） {len(soldout)} 个")
+                soldout.append({"item_id": it, "name": meta["name"], "provider_id": pid,
+                                "provider_name": ("" if pid == 0 else prov_name.get(str(pid), str(pid))),
+                                "fname": fname, "flow": flow,
+                                "total_inv": (0.0 if row is None else row["total"])})
+        print(f"[5/7] 当天售罄（上架供商 is_sold_out=1） {len(soldout)} 个｜其中无供商0行补判 {n_no_zero} 个（供商留空）")
+
+        # 5.5) 连续缺货天回溯（v1.5）：判据与当日售罄完全一致，从目标日往前逐日数到「有货」为止
+        _, sd = db.q("order", "SELECT DISTINCT snapshot_date FROM "
+                              f"{tables['inventory_sale']} WHERE snapshot_date<='{day}'")
+        snap_days = sorted({str(r[0]) for r in sd})
+        hist, seen_item = {}, set()
+        ids_all = [s["item_id"] for s in soldout]
+        for i in range(0, len(ids_all), 400):
+            chunk = ids_all[i:i+400]
+            ph = ",".join(["'%s'" % x for x in chunk])
+            _, hr = db.q("order", "SELECT snapshot_date, item_id, provider_id, is_sold_out "
+                                  f"FROM {tables['inventory_sale']} "
+                                  f"WHERE snapshot_date BETWEEN '{snap_days[0]}' AND '{day}' "
+                                  f"AND item_id IN ({ph})")
+            for r in hr:
+                hist[(str(r[0]), int(r[1]), int(r[2]))] = int(r[3] or 0)
+                seen_item.add((str(r[0]), int(r[1])))
+
+        def soldout_at(it, pid, d):
+            if (d, it, pid) in hist:
+                return hist[(d, it, pid)] == 1
+            return pid == 0          # 无供商 0 行 → 与当日判据一致，算售罄
+
+        d30 = (datetime.date.fromisoformat(day) - datetime.timedelta(days=29)).isoformat()
+        win30 = [d for d in snap_days if d >= d30 and d <= day]
+        n_capped = n_none = n_short = 0
+        for s in soldout:
+            it, pid = s["item_id"], s["provider_id"]
+            k = 0
+            for d in reversed(snap_days):
+                if soldout_at(it, pid, d):
+                    k += 1
+                else:
+                    break
+            s["consec_days"] = k
+            s["consec_capped"] = (k >= len(snap_days))
+            if s["consec_capped"]:
+                n_capped += 1
+            if not win30 or not any((d, it) in seen_item for d in win30):
+                s["s30"], s["s30_state"] = 0, "none"
+                n_none += 1
+            else:
+                s["s30"] = sum(1 for d in win30 if soldout_at(it, pid, d))
+                if len(win30) >= 30:
+                    s["s30_state"] = "ok"
+                else:
+                    s["s30_state"] = "short"
+                    n_short += 1
+        print(f"[5.5/7] 连续缺货回溯：快照 {len(snap_days)} 天（{snap_days[0]}~{snap_days[-1]}）"
+              f"｜数到边界仍在断 {n_capped} 个（标历史数据不足）"
+              f"｜近30天窗口 {len(win30)} 天（{win30[0]}~{win30[-1]}）：可行 {len(soldout)-n_none} 个、"
+              f"窗口不足30天 {n_short} 个（标不满足）、无历史数据 {n_none} 个")
 
         # 6) 月销（order_code 关联、Unix 时间戳、valid=1）
         monthly = {}
