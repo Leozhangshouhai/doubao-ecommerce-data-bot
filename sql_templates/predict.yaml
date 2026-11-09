@@ -1,0 +1,77 @@
+# ③ 热品预判缺货 · 口径模板（参数化 SQL 与规则说明）
+#
+# 这张表的定位：**给采购看的提前预警**，不是"已经断了"（那是 ① 卖断货与 ④ 供货缺货）。
+#
+# 最关键的一条设计原则（务必遵守，否则会整类漏报）：
+#   ③ 不是 ② 爆卖的子集，两者是交叉关系。
+#   稳定日销 300 件、库存只够 2 天的品，因为它不"暴涨"，进不了 ②；
+#   但它马上就要断，必须出现在 ③。
+#   所以 ③ 自己从"热品池"取数，不从 ② 的名单里筛。
+#
+# 热品池 = 近 7 日销量 ≥ min_q7 件 且 当日未断货 的在售品
+# ③ 名单 = 热品池 ∩ 可售天数 ≤ max_cover_days
+
+title: 热品预判缺货
+version: v1.0
+updated: 2026-11-09
+
+# ---------------- 阈值 ----------------
+min_q7: 10              # 热品池地板：近 7 日件数 ≥ 10（全站中位数附近，剔除僵尸品与小基数噪声）
+max_cover_days: 15      # 出表上限：可售 > 15 天不入表（避免把"货还很多"的品堆进来）
+
+# 紧急度分级：可售天数 ≤ 阈值即命中，从 P0 往下取第一个命中
+levels:
+  P0: 1                 # 今天下单（T+1 到货才接得上）
+  P1: 2                 # 明天必须下单
+  P2: 5                 # 本周安排
+  P3: 15                # 观察项
+
+# ---------------- 计算规则 ----------------
+# 日均销量：保守口径取 max(近3日均, 近7日日均) —— 宁可早报，不可晚报
+daily_rule: max(d3, d7)
+
+# 可售天数 = 当前库存 ÷ 日均
+cover_rule: stock / daily
+
+# 当前库存：目标库存日快照，按 (item_id, provider_id) 聚合 SUM(total_qty)
+#   ⚠️ 必须 SUM 所有 zone_code 行。实测 11-08 快照 55,475 行恰等于唯一 (item_id,provider_id)，
+#   当前无多仓行；但口径上仍写 SUM，防止后续出现多仓后单行覆盖导致漏报 P0。
+stock_sql: |
+  SELECT item_id, provider_id, SUM(total_qty) AS tq, MAX(is_sold_out) AS so
+  FROM {inventory_sale}
+  WHERE snapshot_date = '{day}'
+  GROUP BY item_id, provider_id
+
+# 逐日销量：只取目标日所在 7 日窗口
+#   ⚠️ DATE_FORMAT 的 %Y 在 Python 字符串格式化里会被吃掉，故这里用 DATE() 不用 DATE_FORMAT
+sales_sql: |
+  SELECT od.sku_code, DATE(FROM_UNIXTIME(oh.order_time)) AS d, SUM(od.quantity) AS q
+  FROM {order_detail} od JOIN {order_head} oh ON od.order_code = oh.order_code
+  WHERE oh.valid = 1 AND oh.order_time >= {ts0}
+  GROUP BY od.sku_code, DATE(FROM_UNIXTIME(oh.order_time))
+
+# ---------------- 输出列（12 列）----------------
+columns:
+  - 优先级            # P0~P3，色块
+  - 商城商品码
+  - 商品名称
+  - 供商              # 空 → 写「没有供商」（自营，见 SKILL.md 业务常识）
+  - 大分类            # 流通品 / 非流通品
+  - 近7日销量
+  - 日均销量          # max(近3日均, 近7日日均)
+  - 当前库存
+  - 可售天数          # 升序排序主键
+  - 预估断货日        # 目标日 + floor(可售天数)
+  - 建议下单日        # 断货日 − 1（T+1 到货要接得上）
+  - 是否爆卖榜        # 同时命中 ② 的品 = 又涨又快断，最高优先级
+
+# ---------------- 排除与标注 ----------------
+exclude:
+  - 当日 is_sold_out=1 → 归 ① 卖断货 / ④ 供货缺货，不进 ③
+  - 近 7 日 < min_q7  → 不属热品，不进热品池
+  - 可售天数 > max_cover_days → 货还够，不预警
+
+notes:
+  库存为0但未标售罄: "库存 0 却未标售罄，需核对数据源"
+  云仓: "可售 > 1000 天，典型云仓（有货极多 / 无货断崖），不入 P 档预警"
+  单日尖峰: "单日销量 > 其余 6 日均值 5 倍，日均被抬高可能虚报紧急度"

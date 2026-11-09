@@ -16,7 +16,7 @@ QPWY机器人 · 卖断货报表生成器（配置驱动版 v1.1）
 
 只执行 SELECT，不修改任何数据。
 """
-import json, os, sys, socket, threading, time, datetime, argparse
+import json, os, re, sys, socket, threading, time, datetime, argparse
 import yaml, paramiko, pymysql
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -337,9 +337,8 @@ def main():
         _, prov = db.q("goods", f"SELECT provider_id, provider_name FROM {tables['item_provider']} WHERE status=1")
         prov_name = {}
         for r in prov:
-            nm = str(r[1] or "")
-            if "（云仓）" in nm:
-                nm = nm.replace("（云仓）", "")
+            # 云仓后缀在库里存在混写：全角（云仓）、半角(云仓）、(云仓) 都有，必须用正则
+            nm = re.sub(r"[（(]\s*云仓\s*[)）]", "", str(r[1] or "")).strip()
             prov_name[str(r[0])] = nm
         print(f"[2/7] 供商名称 {len(prov_name)} 个")
 
