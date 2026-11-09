@@ -1,5 +1,6 @@
-# 安全：任何含真实凭据的配置文件不得入库
-# （占位符模板 ecommerce_bot.yaml 是唯一允许进仓库的同名文件）
+# 安全：配置文件一律不入库
+# （ecommerce_bot.yaml 由老板自行上传到 ~/.qpwy_bot/，仓库只放代码、口径模板与文档）
+ecommerce_bot.yaml
 *.local.yaml
 *.conn.json
 conn.json
