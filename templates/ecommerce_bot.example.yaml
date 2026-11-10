@@ -1,0 +1,114 @@
+# ============================================================
+# ecommerce_bot.yaml · 模板（不含任何凭据）
+# ------------------------------------------------------------
+# 老板只需要改 9 个「凭据类」占位符（下面标 ⭐），其余全部保持默认。
+#
+# 技术项（caliber / tables / style / reports）默认即 QPWY 口径，开箱可用。
+# 换客户要改这些时，由交付方改，不由老板改。
+#
+# ⚠️ 本文件填好后含数据库凭据：仅存于自己电脑/私密会话，不上 GitHub、不上网盘、不转发。
+# ============================================================
+
+# ⭐ 客户 / 店铺标识（用于报表标题与日志）
+customer: QPWY
+
+# ---------- 连接配置 ----------
+conn:
+  # ⭐ 方式 A：跳板机转发（推荐）
+  mode: jump                # jump | direct
+  jump_host: "<跳板机地址>"
+  jump_user: "<跳板机账号>"
+  jump_password: "<跳板机密码>"
+
+  # 本地隧道端口映射（豆包侧已建好隧道时填写）
+  tunnel:
+    order_port: 13307       # 订单库实例本地端口
+    goods_port: 13306       # 商品库实例本地端口
+
+  # ⭐ 远端实例地址（跳板机后方的数据库实例，运行时动态建隧道）
+  targets:
+    order: { host: "<订单库内网地址>", port: 3306 }
+    goods: { host: "<商品库内网地址>", port: 3306 }
+
+  # 方式 B：数据库直连（无跳板机时用，并删掉方式 A 的字段）
+  # direct:
+  #   order_host: "<订单库地址>"
+  #   order_port: 3306
+  #   goods_host: "<商品库地址>"
+  #   goods_port: 3306
+
+# ⭐ 数据库只读账号（只读权限，机器人只执行 SELECT）
+db:
+  user: "<只读账号>"
+  password: "<只读密码>"
+
+# ---------- 业务口径（卖断货 v1.4，已按 QPWY 样板固化；非 QPWY 客户由交付方调整） ----------
+caliber:
+  soldout:
+    on_sale_status: 2                # item_sale.status=2 上架
+    sale_type: 1                     # item_sale.sale_type=1 定价销售
+    sold_out_rule: "total_qty < 1"   # 售罄判据
+    baseline_date: "2026-11-03"      # 连续售罄基线（第 1 天）
+
+    # ⚠️ 大分类=流通的类目名（按 item_category.name 精确匹配，其余全部=非流通）
+    #
+    # 【已确认口径 · 只准照用】
+    # 下面这 5 类是交付方核准的 QPWY 商业口径，不是遗漏、不需要补充。
+    # AI 一律照此执行，并且：
+    #   · 禁止向客户询问「要不要补类目 / 按哪个口径」
+    #   · 禁止评价该口径的合理性，禁止统计流通占比后再"提醒"客户
+    #   · 禁止自行增删类目名（如把「食品」整体当流通）
+    # 换客户要改，由交付方改。
+    flow_cats:
+      - "饮料及水"
+      - "方便速食"
+      - "米面粮油"
+      - "牛奶乳品"
+      - "中外名酒"
+
+    # 【已确认口径 · 只准照用】档位阈值同理，不许拿"会偏 A"这类后果去问客户
+    grade:
+      flow:                          # 流通品月销档（元）
+        A: 10000
+        B: 1000
+        C: 500
+      non_flow:                      # 非流通品月销档（元）
+        A: 2000
+        B: 1000
+        C: 500
+    history_insufficient: true       # 历史不足时标「历史不足」，不填天数
+
+  # ④ 供货缺货。不写这节时用此默认：连续 2 天、权重 5/2/1/0.3、前 20。
+  # 等级与流通品沿用上面的 soldout，不在这里另写一套。
+  supply_short:
+    consecutive_days: 2
+    top_n: 20
+    weight:
+      A: 5
+      B: 2
+      C: 1
+      D: 0.3
+
+# ---------- 关键表（默认 QPWY 已核对的库名/表名；8 张全部必填，缺一张跑不起来） ----------
+tables:
+  inventory_sale: "dmall_saas_atp.inventory_daily_sale"
+  inventory_detail: "dmall_saas_atp.inventory_daily_detail"
+  item_sale: "goods_service.item_sale"
+  item_provider: "market.item_provider"          # 真实库在 market，非 goods_service
+  item_category: "goods_service.item_category"   # 类目表（goods.top_cat → 本表 name）
+  goods: "goods_service.goods"                   # 一级类目（top_cat 关联用）
+  order_head: "dmall_saas_oms.order_head"        # 订单头（order_time 为 Unix 时间戳）
+  order_detail: "dmall_saas_oms.order_detail"    # 订单明细（valid=1 为有效行）
+  inventory_logic: "dmall_saas_atp.INVENTORY_LOGIC"   # 已弃用（v1.4 不再读），保留占位
+
+# ---------- 已开通报表（四张全部开通，共用一个定时任务） ----------
+reports:
+  enabled:
+    - soldout          # ① 卖断货
+    - hot_sale         # ② 爆卖（规模榜 + 速度榜）
+    - predict          # ③ 热品预判缺货
+    - supply_short     # ④ 供货缺货
+
+# ---------- 样式契约（引用 SKILL 内置模板，勿改） ----------
+style:
+  template: default     # default = 模板样式契约（微软雅黑 / 色板 / 布局 / 统一网格）

@@ -32,7 +32,9 @@ REQUIRED = {
 }
 CONN_KEYS = {"mode": {"in": ["jump", "direct"]}}
 DB_KEYS = {"user": {"type": str, "nonempty": True}, "password": {"type": str, "nonempty": True}}
-TABLE_KEYS = ["inventory_sale", "item_sale", "order_head", "order_detail"]
+# 8 张表全部必填：缺 goods/item_category 时校验放行、跑到报表才崩（历史踩坑）
+TABLE_KEYS = ["inventory_sale", "item_sale", "item_provider",
+              "item_category", "goods", "order_head", "order_detail"]
 CALIBER_SOLDOUT_KEYS = ["on_sale_status", "sale_type", "sold_out_rule", "grade", "flow_cats"]
 
 
@@ -115,13 +117,13 @@ def main():
     # tables 校验
     for k in TABLE_KEYS:
         if not cfg["tables"].get(k):
-            errors.append(f"tables.{k} 必填（缺关键表）")
+            errors.append(f"tables.{k} 缺失（表名由交付方确定，模板不完整：请联系交付方补齐，不要询问客户）")
 
     # caliber.soldout 校验
     so = cfg.get("caliber", {}).get("soldout", {})
     for k in CALIBER_SOLDOUT_KEYS:
         if k not in so:
-            errors.append(f"caliber.soldout.{k} 缺失（卖断货口径）")
+            errors.append(f"caliber.soldout.{k} 缺失（属技术口径，模板不完整：请联系交付方补齐，不要询问客户）")
 
     if errors:
         finish(errors)
