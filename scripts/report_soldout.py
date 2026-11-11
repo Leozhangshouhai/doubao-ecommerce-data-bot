@@ -218,7 +218,7 @@ def build_xlsx(rows_out, n, day, out_path):
     notes = [
         "1. 等级按月销额分档：A 流通>1万/非流通>2千，B 1000+、C 500+、D<500；与缺货天数无关。",
         "2. 「全量名单」按优先级排序，都是当日售罄的品；颜色：红=A 橙=B 黄=C 灰=D。",
-        "3. 缺货天数按快照逐日实算：数到最早快照日仍断→「历史数据不足」；30 天未满→「不满足（实N天）」。",
+        "3. 「连续缺货天」与「售罄天数」都按已有库存记录逐日实算；数到最早一天仍在断的标「≥N天」，显示「已记录N天」表示还没攒满 30 天、暂不给结论。",
         "4. D 类默认放全量表末尾；日常可不展开，需要时再筛供商。",
         "5. 「建议动作」给操作指引，规则细节仍保留在「入选说明」列。",
     ]
@@ -246,7 +246,7 @@ def build_xlsx(rows_out, n, day, out_path):
     for j in range(1, 5):
         ws.column_dimensions[chr(64 + j)].width = 22
 
-    cols10 = ["优先级", "等级", "商城商品码", "商品名称", "供商", "大分类", "连续缺货天", "近30天售罄天", "建议动作", "入选说明"]
+    cols10 = ["优先级", "等级", "商城商品码", "商品名称", "供商", "大分类", "连续缺货天", "售罄天数", "建议动作", "入选说明"]
     widths10 = [12, 6, 12, 36, 28, 10, 15, 18, 26, 28]
     history_insufficient = False  # 由调用方填入是否标「历史不足」
 
@@ -260,15 +260,15 @@ def build_xlsx(rows_out, n, day, out_path):
             capped = r.get("consec_capped", True)
             st = r.get("s30_state", "none")
             if st == "none":
-                s30_txt = "没有历史数据"
+                s30_txt = "无记录"
             elif st == "short":
-                s30_txt = f"不满足（实{r.get('s30', 0)}天）"
+                s30_txt = f"已记录{r.get('s30', 0)}天"
             else:
                 s30_txt = r.get("s30", 0)
             if capped:
-                days_txt = "历史数据不足"
-                act = "连续缺货，历史数据不足，需人工确认"
-                why = f"{g}类·连续缺货（更早历史数据不足）"
+                days_txt = f"≥{k}天"
+                act = f"连续缺货≥{k}天，优先补货/催供"
+                why = f"{g}类·连续缺货≥{k}天"
             elif k == 1:
                 days_txt = 1
                 act = "当天缺货，优先补货/催供"
@@ -280,7 +280,7 @@ def build_xlsx(rows_out, n, day, out_path):
             out.append({"优先级": PRI[g], "等级": g, "商城商品码": str(r["item_id"]), "商品名称": r["name"],
                         "供商": r["provider_name"] or "没有供商", "大分类": r["flow"] + "品",
                         "连续缺货天": days_txt,
-                        "近30天售罄天": s30_txt,
+                        "售罄天数": s30_txt,
                         "建议动作": act,
                         "入选说明": why})
         return out
@@ -441,9 +441,9 @@ def main():
                     s["s30_state"] = "short"
                     n_short += 1
         print(f"[5.5/7] 连续缺货回溯：快照 {len(snap_days)} 天（{snap_days[0]}~{snap_days[-1]}）"
-              f"｜数到边界仍在断 {n_capped} 个（标历史数据不足）"
-              f"｜近30天窗口 {len(win30)} 天（{win30[0]}~{win30[-1]}）：可行 {len(soldout)-n_none} 个、"
-              f"窗口不足30天 {n_short} 个（标不满足）、无历史数据 {n_none} 个")
+              f"｜数到边界仍在断 {n_capped} 个（标 ≥N天）"
+              f"｜售罄天数窗口 {len(win30)} 天（{win30[0]}~{win30[-1]}）：可给结论 {len(soldout)-n_none} 个、"
+              f"窗口未满30天 {n_short} 个（标已记录N天）、无记录 {n_none} 个")
 
         # 6) 月销（order_code 关联、Unix 时间戳、valid=1）
         monthly = {}
