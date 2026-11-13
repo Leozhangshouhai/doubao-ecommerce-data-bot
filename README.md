@@ -56,7 +56,8 @@
 ## 架构
 
 ```
-├── SKILL.md                  # Skill 定义：触发词 + 流程 + 口径 + 安全约束
+├── SKILL.md                  # Skill 入口：触发与加载 + 4 表流程 + 安全 + 样式
+├── SKILL_REGISTRY.md         # 模块注册表：新 SKILL 加进来前查这张表
 ├── templates/
 │   └── ecommerce_bot.example.yaml  # 去凭据配置模板（表名/flow_cats 已写死，照用不得改）
 ├── scripts/
@@ -73,13 +74,24 @@
 │   ├── predict.yaml          # ③ 预警口径
 │   └── supply_short.yaml     # ④ 供商口径（不改 soldout.yaml）
 ├── references/
-│   └── style-contract.md     # 四表样式契约（模板保真，禁止自拟配色）
+│   ├── style-contract.md     # 四表样式契约（模板保真，禁止自拟配色）
+│   ├── free-qa/              # 自由问答功能包（换客户只换 knowledge.md，其余不动）
+│   │   ├── gate.md           # 决策闸门：三问判定 + 三类出口 + 不许幻想红线
+│   │   ├── strategy.md       # 说话策略：路由 / 筛选边界 / 反问 / 禁词 / 风格
+│   │   └── knowledge.md      # 业务知识：能力边界 + 五条业务常识
+│   └── boss-rules/           # 老板口述规则（导入容器，靠状态机控制生效）
+│       ├── README.md         # 状态机 + 冲突优先级 + 导入流程 + 条目模板
+│       ├── 口径类.md         # 影响取数的规则（现为空）
+│       ├── 说法类.md         # 老板的叫法与忌讳词（现为空）
+│       └── 待确认.md         # 未确认规则，不许用于出表
 ├── tools/
-│   └── compare_reports.py    # 两份产物逐格比对（回归/换号一致性验收）
+│   ├── compare_reports.py    # 两份产物逐格比对（回归/换号一致性验收）
+│   └── check_skill_conflict.py # 触发词冲突检查（新建模块前必跑，报重叠就改 description）
 └── docs/
     ├── 老板使用SOP.md              # 老板版（三步，不含技术路径）
     ├── 新号安装验收SOP-技术版.md    # 交付方内部用
-    └── 02爆卖-03热品预判缺货-方案草案.md
+    ├── 02爆卖-03热品预判缺货-方案草案.md
+    └── 分层改造_落位表_20261113.md  # SKILL 分层改造的逐条落位与验收记录
 ```
 
 ### 配置驱动原理
