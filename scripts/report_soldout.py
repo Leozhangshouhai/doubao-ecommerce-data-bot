@@ -21,6 +21,9 @@ import yaml, paramiko, pymysql
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+# 供商列统一文案：没有供商（provider_id=0/空）的品一律标记为「自营」（交付方封板 2026-11-19）
+SELF_OP_NAME = "自营"
+
 
 def load_cfg(path):
     with open(path, encoding="utf-8") as f:
@@ -491,7 +494,7 @@ def build_track_data(db, tables, so, prov_name, cat_name, topcat,
         s30 = s[-n30:].count("2")
         track_rows.append({"item_id": str(it), "name": nm, "fname": fname or "?",
                            "flow": flow,
-                           "provider_name": ("" if pid == 0 else prov_name.get(str(pid), "")),
+                           "provider_name": (SELF_OP_NAME if pid == 0 else (prov_name.get(str(pid)) or SELF_OP_NAME)),
                            "max_amt": round(amt, 2), "grade": grade_of(amt, flow, grade_th),
                            "s30": s30, "s": s})
     go = {"A": 0, "B": 1, "C": 2, "D": 3}
@@ -585,7 +588,7 @@ def build_xlsx(rows_out, n, day, out_path, track=None):
     ab = {}
     for r in rows_out:
         if r["grade"] in ("A", "B"):
-            p = r["provider_name"] or "没有供商"
+            p = r["provider_name"] or SELF_OP_NAME
             ab.setdefault(p, [0, 0, 0])
             ab[p][0] += 1
             ab[p][1 if r["grade"] == "A" else 2] += 1
@@ -630,7 +633,7 @@ def build_xlsx(rows_out, n, day, out_path, track=None):
                 act = f"连续缺货{k}天，优先补货/催供"
                 why = f"{g}类·连续缺货{k}天"
             out.append({"优先级": PRI[g], "等级": g, "商城商品码": str(r["item_id"]), "商品名称": r["name"],
-                        "供商": r["provider_name"] or "没有供商", "大分类": r["flow"] + "品",
+                        "供商": r["provider_name"] or SELF_OP_NAME, "大分类": r["flow"] + "品",
                         "连续缺货天": days_txt, "售罄天数": s30_txt,
                         "建议动作": act, "入选说明": why})
         return out
@@ -720,7 +723,7 @@ def build_track_sheet(book, track, day, F):
         ws.write_string(rr, 1, r["name"] or "", f_body)
         ws.write_string(rr, 2, r["fname"] or "", f_body)
         ws.write_string(rr, 3, r["flow"] + "品", f_body)
-        ws.write_string(rr, 4, r["provider_name"] or "", f_body)
+        ws.write_string(rr, 4, r["provider_name"] or SELF_OP_NAME, f_body)
         ws.write_number(rr, 5, r["max_amt"], f_num)
         g = r["grade"]
         ws.write_string(rr, 6, g, F[f"g_{g}"])
@@ -822,7 +825,7 @@ def main():
         print(f"[4/7] inventory_sale {day} {len(sale_map)} 行")
 
         # 售罄判据（v1.5）：上架供商行 is_sold_out=1；上架供商=0 且快照里没有供商 0 行
-        # 时算售罄、供商留空，不得改记成快照里的旧供商
+        # 时算售罄、供商标「自营」，不得改记成快照里的旧供商
         soldout = []
         n_no_zero = 0
         for it, meta in item_map.items():
@@ -836,10 +839,10 @@ def main():
                 fname = cat_name.get(str(c)) if c else "?"
                 flow = "流通" if fname in flow_cats else "非流通"
                 soldout.append({"item_id": it, "name": meta["name"], "provider_id": pid,
-                                "provider_name": ("" if pid == 0 else prov_name.get(str(pid), str(pid))),
+                                "provider_name": (SELF_OP_NAME if pid == 0 else (prov_name.get(str(pid)) or SELF_OP_NAME)),
                                 "fname": fname, "flow": flow,
                                 "total_inv": (0.0 if row is None else row["total"])})
-        print(f"[5/7] 当天售罄（上架供商 is_sold_out=1） {len(soldout)} 个｜其中无供商0行补判 {n_no_zero} 个（供商留空）")
+        print(f"[5/7] 当天售罄（上架供商 is_sold_out=1） {len(soldout)} 个｜其中无供商0行补判 {n_no_zero} 个（供商标「自营」）")
 
         # 5.5) 连续缺货天回溯（v1.5）：判据与当日售罄完全一致，从目标日往前逐日数到「有货」为止
         _, sd = db.q("order", "SELECT DISTINCT snapshot_date FROM "

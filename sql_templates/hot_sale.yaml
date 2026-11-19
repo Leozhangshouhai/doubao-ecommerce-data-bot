@@ -95,7 +95,7 @@ SELECT id, name FROM {item_category} WHERE id IN ({top_cat_ids});
 ```sql
 SELECT provider_id, provider_name FROM {item_provider} WHERE status = 1 AND provider_id IN ({provider_ids});
 ```
-> 查不到的供商 → 表内写「—」，备注列标「没有供商」（= 自营商品，见 SKILL.md「业务常识」第 2 条，不要改写成「自营」）。
+> 查不到 / 没有供商的品 → 供商列写「自营」、备注列也标「自营」（见 SKILL.md「业务常识」第 2 条，交付方封板 2026-11-19）。
 
 ## 计算规则（固化，改这里必须同步 `scripts/report_hot_sale.py` 与 `references/style-contract.md`）
 
@@ -118,4 +118,4 @@ SELECT provider_id, provider_name FROM {item_provider} WHERE status = 1 AND prov
   （典型：`[0,0,0,0,45,65,40]` 前 4 天其实是缺货，14 倍加速是假的）
 
 **备注列（异常原因）**：可售 >1000 天 → 「云仓 · 天数」（云仓=有货量大、无货即断，**是业务模式，不是数据错误**）；731~1000 天 → 库存偏高；
-单日峰值超其余 6 日均值 5 倍 → 含单日尖峰；供商为空 → 没有供商（自营商品）。一个品最多两条，按 云仓→尖峰→偏高→没有供商 排序。
+单日峰值超其余 6 日均值 5 倍 → 含单日尖峰；供商为空 → 自营。一个品最多两条，按 云仓→尖峰→偏高→自营 排序。

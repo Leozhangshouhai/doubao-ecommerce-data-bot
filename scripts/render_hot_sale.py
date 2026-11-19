@@ -26,6 +26,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.properties import PageSetupProperties
 
 FONT = "Microsoft YaHei"
+# 没有供商（provider_id=0/空）的品供商列统一标记为「自营」（交付方封板 2026-11-19）
+SELF_OP_NAME = "自营"
 C_TITLE = "111827"
 C_SUB = "6B7280"
 C_HEAD = "1F2937"
@@ -58,7 +60,7 @@ SIZE_METRICS = [
     "加速比 = 近 3 日日均 ÷ 前 4 日日均；前 4 日为 0 且有量 → 记「新增」，不算无穷大",
     "上涨天数 = 只数有货且销量递增的天数（断货日的 0 不计）；可售天数 = 当前库存 ÷ 近 3 日日均",
     "库存价值档 = 与卖断货同口径：流通品月销额 >1 万、非流通 >2 千为 A；1000 整为 B、500 整为 C",
-    "备注列 = 可售 >1000 天「云仓 · 天数」（云仓=有货量大/无货即断）、731~1000 天「库存偏高」、峰值超其余 6 日均值 5 倍「含单日尖峰」、供商空「没有供商」",
+    "备注列 = 可售 >1000 天「云仓 · 天数」（云仓=有货量大/无货即断）、731~1000 天「库存偏高」、峰值超其余 6 日均值 5 倍「含单日尖峰」、供商空「自营」",
 ]
 SIZE_BOARD = [
     ("爆款", "≥500 件", "单周最大体量，优先保货"),
@@ -75,7 +77,7 @@ SPEED_METRICS = [
     "加速比 = 近 3 日日均 ÷ 前 4 日日均；前 4 日为 0 且有量 → 记「新增」，新品档即此类",
     "上涨天数 = 只数有货且销量递增的天数（断货日的 0 不计）；可售天数 = 当前库存 ÷ 近 3 日日均",
     "库存价值档 = 与卖断货同口径：流通品月销额 >1 万、非流通 >2 千为 A；1000 整为 B、500 整为 C",
-    "备注列 = 可售 >1000 天「云仓 · 天数」（云仓=有货量大/无货即断）、731~1000 天「库存偏高」、峰值超其余 6 日均值 5 倍「含单日尖峰」、供商空「没有供商」",
+    "备注列 = 可售 >1000 天「云仓 · 天数」（云仓=有货量大/无货即断）、731~1000 天「库存偏高」、峰值超其余 6 日均值 5 倍「含单日尖峰」、供商空「自营」",
 ]
 SPEED_BOARD = [
     ("黑马", "≥10 倍", "异常陡峭，最快爆"),
@@ -262,19 +264,19 @@ def anomaly_note(x):
     if 730 < cov <= 1000:
         notes.append(f"库存偏高 {_human_cover(cov)}")
     if not x.get("provider_name"):
-        notes.append("没有供商")
+        notes.append("自营")
     return "；".join(notes[:2])
 
 
 def fmt_size_row(x):
-    return [x["tier"], x["item_id"], x["name"], x.get("provider_name") or "—",
+    return [x["tier"], x["item_id"], x["name"], x.get("provider_name") or SELF_OP_NAME,
             x.get("fname") or "—", int(x["qty_7d"]), x["avg_3d"], x["acc"],
             x["rise_days"], x["stock_grade"], x["cover_days"], anomaly_note(x)]
 
 
 def fmt_speed_row(x):
     acc = x["acc"] if x.get("acc") is not None else "新增"
-    return [x["tier"], x["item_id"], x["name"], x.get("provider_name") or "—",
+    return [x["tier"], x["item_id"], x["name"], x.get("provider_name") or SELF_OP_NAME,
             x.get("fname") or "—", int(x["qty_7d"]), acc, x["rise_days"],
             x["avg_3d"], x["stock_grade"], x["cover_days"], anomaly_note(x)]
 

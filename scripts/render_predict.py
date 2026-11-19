@@ -18,6 +18,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 FONT = "Microsoft YaHei"
+# 没有供商（provider_id=0/空）的品供商列统一标记为「自营」（交付方封板 2026-11-19）
+SELF_OP_NAME = "自营"
 C_TITLE, C_SUB, C_HEAD = "111827", "6B7280", "1F2937"
 # 深底 / 浅底 / 字色，按序位：P0 红 → P3 灰
 TIERS = [("DC2626", "FEE2E2", "B91C1C"),
@@ -127,7 +129,7 @@ def build_overview(ws, d):
     hdr_row(ws, ["供商", "全部预警", "其中 P0+P1", "其中 P0"], 21)
     ab = {}
     for r in d.get("rows", []):
-        p = r["provider_name"] or "没有供商"
+        p = r["provider_name"] or SELF_OP_NAME
         a3 = ab.setdefault(p, [0, 0, 0])
         a3[0] += 1
         if r["level"] in ("P0", "P1"):
@@ -174,7 +176,7 @@ def build_sheet(ws, d, rows=None, title=None, sub=None):
         e1 = r.get("est_out_min") or r["est_out"]
         e2 = r.get("est_out_max") or r["est_out"]
         est = e1 if e1 == e2 else "%s~%s" % (e1, str(e2)[5:])
-        vals = [r.get("grade", "D"), str(r["item_id"]), r["name"], r["provider_name"] or "没有供商",
+        vals = [r.get("grade", "D"), str(r["item_id"]), r["name"], r["provider_name"] or SELF_OP_NAME,
                 r["flow"] + "品", int(r["q7"]), r["daily"], int(r["stock"]), r["cover"],
                 est, r["order_by"], int(r.get("gap3", 0)), "是" if r["in_hot"] else ""]
         for j, v in enumerate(vals, 2):
@@ -230,7 +232,7 @@ def main():
                 "按档位 + 缺口 + 等级 + 日均降序"
                 % (d["day"], d["win"][0], d["win"][-1], label, len(x), c["P0"], c["P1"], c["P2"], c["P3"]))
 
-    for name, label, ttl in (("自营补货清单", "自营（没有供商）", "热品预判缺货 · 自营补货清单"),
+    for name, label, ttl in (("自营补货清单", "自营（没有供商，内部补货）", "热品预判缺货 · 自营补货清单"),
                              ("热品清单", "百世鼎盛等真实库存供商", "热品预判缺货 · 热品清单")):
         x = own if name == "自营补货清单" else hot
         ws = wb.create_sheet(name)
