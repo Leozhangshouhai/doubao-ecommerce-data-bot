@@ -172,7 +172,7 @@ def _hx(c):
     return c if c.startswith("#") else "#" + c
 
 
-# ---------- 第 4 页：全部供应商售罄跟踪（不是第 5 张报表） ----------
+# ---------- 第 4 页：全部供商售罄跟踪（不是第 5 张报表） ----------
 TRACK_COLS = ["商城商品码", "商品名称", "一级分类", "大分类", "供商",
               "最高月销", "等级", "近30天售罄天数"]
 TRACK_FILL = {"售罄": "FCE4E4", "有货": "E2EFDA", "下架": "EDEDED"}
@@ -688,7 +688,7 @@ def build_xlsx(rows_out, n, day, out_path, track=None):
 def build_track_sheet(book, track, day, F):
     """第四页：197 万格按行一次写入；颜色走条件格式，不为每格建样式。"""
     tlog("[4] 开始写第四页")
-    ws = book.add_worksheet("全部供应商售罄跟踪")
+    ws = book.add_worksheet("全部供商售罄跟踪")
     dates = track["dates"]
     rev = list(reversed(dates))
     rows = track["rows"]
@@ -699,7 +699,7 @@ def build_track_sheet(book, track, day, F):
     pos = [di[d] for d in rev]
 
     ws.set_row(0, 28)
-    ws.merge_range(0, 0, 0, min(lastc - 1, 23), "全部供应商售罄跟踪", F["title"])
+    ws.merge_range(0, 0, 0, min(lastc - 1, 23), "全部供商售罄跟踪", F["title"])
     ws.merge_range(1, 0, 1, min(lastc - 1, 23),
                    f"数据日期 {day}｜共 {len(rows)} 个商品｜{nd} 个库存日"
                    f"（{dates[0]}~{dates[-1]}）｜快照日按当前上架供商匹配，供商中途换过的日子可能显示为下架",
@@ -913,7 +913,7 @@ def main():
         for r in rows_out:
             n[r["grade"]] += 1
 
-        # 8) 第 4 页：全部供应商售罄跟踪（不是第 5 张报表，不改前三页口径）
+        # 8) 第 4 页：全部供商售罄跟踪（不是第 5 张报表，不改前三页口径）
         tlog("[3] 开始拼第 4 页数据")
         try:
             track = build_track_data(db, tables, so, prov_name, cat_name, topcat,

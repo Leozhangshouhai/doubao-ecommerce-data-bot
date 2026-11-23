@@ -147,7 +147,8 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 2. **① 卖断货**：`python3 scripts/report_soldout.py --config ~/.qpwy_bot/ecommerce_bot.yaml --outdir <日报目录>`；目标日 = `MAX(snapshot_date)`；出 XLSX + JSON（JSON 留档）→ **只交付 XLSX**
 3. **④ 供货缺货**：`python3 scripts/report_supply_short.py --self-check` 通过后 `--config ~/.qpwy_bot/ecommerce_bot.yaml --outdir <日报目录>`；取最近两个库存日，不足 2 天报「历史不足」并跳过这张；出 XLSX + JSON（JSON 留档）→ **只交付 XLSX**
 4. **② 爆卖**：`python3 scripts/report_hot_sale.py --config ~/.qpwy_bot/ecommerce_bot.yaml --outdir <日报目录>` 出数，再 `python3 scripts/render_hot_sale.py --json <日报目录>/qpwy_爆卖_YYYYMMDD.json --out <日报目录>/02-爆卖-规模与速度爆品_YYYYMMDD.xlsx` 出表；**只交付 XLSX**，JSON 留档；**③ 热品预判缺货**：`python3 scripts/report_predict.py --config ~/.qpwy_bot/ecommerce_bot.yaml --outdir <日报目录>` 出数，再 `python3 scripts/render_predict.py --json <日报目录>/qpwy_热品预判缺货_YYYYMMDD.json --out <日报目录>/03-热品预判缺货_YYYYMMDD.xlsx` 出表；**只交付 XLSX**，JSON 留档
-5. **回复**：一段总览（每张表 1~2 句关键数字 + 交付链接），不要写成四段长报告
+5. **看板**：`python3 scripts/render_dashboard.py --date YYYYMMDD --out <看板目录>/dashboard.html`（只读四张表当日 JSON，出一页 HTML 汇总；某张表当日 JSON 缺失 → 该卡片写「当日无数据」并照常出页，**不报错、不造数**）；`dashboard.html` **随 XLSX 一起交付给老板**（HTML 做人眼扫描，XLSX 仍是底稿）
+6. **回复**：一段总览（每张表 1~2 句关键数字 + 交付链接 + 看板一句），不要写成四段长报告
 
 ### 硬规则
 
@@ -156,6 +157,18 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 - 创建失败（任务配额不足、权限不足）→ 明确报错，不假装成功；老板可退回手动「出今天的报表」
 - 老板说「改时间 / 多加一张表 / 取消」→ 先查该任务当前完整配置，**只改本次要求的字段**（加表只改 query；改时间同时传 schedule + schedule_type）
 - 换环境 / 换账号：定时任务不迁移，需在新环境重新上传 yaml 并重新设定时
+
+## 每日看板 dashboard.html（固定版式·随定时任务出）
+
+**定位**：给老板**人眼扫一页纸**，不是第 5 张报表（不违反上面的「固定 4 报表」约束，也不新增入口）。XLSX 是底稿，看板只是把四张表的核心数字缩到一屏。
+
+- **唯一出表入口**：`scripts/render_dashboard.py --date YYYYMMDD --out <看板目录>/dashboard.html`。**禁止现场自写 HTML / 自拟配色 / 改版式**
+- **输入**：只读四张表当日 JSON（`qpwy_卖断货_*.json` / `qpwy_爆卖_*.json` / `qpwy_热品预判缺货_*.json` / `04-供货商快缺货_*.json`）。**看板不连库、不重算任何口径**——数字必须与当日 JSON 逐一相等
+- **输出**：`04_样板案例/QPWY/06_看板/dashboard.html`（固定文件名，每天覆盖，老板双击即开）× + `dashboard_YYYYMMDD.html`（按日归档）
+- **版式锁死**（`references/style-contract.md` 色板）：顶部深底 `#1F2937` 标题条 + 一行总览数字；下面 4 张卡片（①卖断货 / ②爆卖 / ③热品预判缺货 / ④供货缺货），每卡固定三层——**一句话结论 → 核心数 + 四色分布条（A `DC2626` / B `C2410C` / C `A16207` / D `4B5563`）→ TOP3 明细行**；底部固定口径说明。**只许数字变，不许改结构、配色、字段名、字号**
+- **精简红线**：单页不放大表、不放明细全量、不做筛选交互。老板要看名单去开 XLSX
+- **缺表处理**：某张表当日 JSON 缺失或解析失败 → 该卡片显示「当日无数据（原因）」并照常出页；**不许用前一天数据顶替**，也不许造数
+- **交付前回读自检（4 条，缺一不可）**：① 四个卡片数 = 当日 JSON 顶层统计（售罄总数/A·B·C·D、规模/速度/新品条数、P0~P3、上榜供商家数）；② 页面出现 `None`/`NaN`/`null` = 缺陷；③ 单文件、无外链外图外字体请求（断网双击可开）；④ 文件大小与生成时间写在页脚
 
 ## 报表数量约束（硬规则）
 
@@ -285,9 +298,16 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 - 没有供商的品（`provider_id` 为 0 / 空）供商列**统一标记为「自营」**，不留空、不写「没有供商」「—」；但**不为它单独写一套话术**（建议动作照缺货天数走）
 - 未支付 79.6% 是货到付款模式的正常状态，**不许当资金风险报给老板**；也不拿 `actual_pay_amount` 当营收口径
 
+**采购 / 收货 / 预约这一侧的白话与字段口径**：见 `references/business-speak/采购收货-业务字段白话.md`（2026-11-23 已对 `172.21.32.31` 只读核库）。四条最容易说错的：
+
+- PO 的 `delivery_at` 是 **datetime 的最后一次收货时间**，**不是「预计到货日」，也不是「供商送来多少」**
+- 采购单数量单位是 **箱**（`purchase_unit` 是 `H06`/`H12` 这类箱规编码），库存表是 **件**，**两套单位不许混算、不许直接相减**
+- `ibd_detail` **没有 `pack_qty` 列**，收货数量看 `qty` + `pack_unit`/`unit`/`surplus_qty`；IBD 是 878 万行大表，查询必须带 `relation_order_no` / 仓 / 时间
+- 预约表当前 **0 行**（预约功能没在用）：① 层「供商声称送来」**没有电子数，只有纸**；写「无预约数据」，不要写 0 箱
+
 ## 缓存机制（首跑建一次，之后每天走增量）
 
-卖断货表带「全部供应商售罄跟踪」这一页后，每次重算 197 万格会拖到十几分钟。所有重活都落成本地缓存，**缓存跟机器家目录走，不跟 SKILL 包走、不跟会话走**：更新/重装 SKILL 不会清掉它。
+卖断货表带「全部供商售罄跟踪」这一页后，每次重算 197 万格会拖到十几分钟。所有重活都落成本地缓存，**缓存跟机器家目录走，不跟 SKILL 包走、不跟会话走**：更新/重装 SKILL 不会清掉它。
 
 | 文件（`~/.qpwy_bot/` 下） | 内容 | 大小 | 什么时候写 |
 |---|---|---|---|
@@ -334,14 +354,19 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 | 项 | 值 |
 |---|---|
 | 任务名 | `QPWY每日链路验证` |
-| 调度 | `0 10 * * *`（Asia/Shanghai，每天早上 10:00） |
+| 调度 | `0 8 * * *`（Asia/Shanghai，每天早上 08:00；与线上任务 `cron_job_id 14738546343170` 一致） |
 | 运行环境 | 云电脑（必须云端，本地电脑会被启动器/文件权限拦住） |
-| 一次跑四件事 | ① 数据链路验证 → ② 卖断货日报 → ③ 爆卖日报 → ④ 热品预判缺货（③）→ ⑤ 供货缺货日报（④） |
+| 一次跑六件事 | ① 数据链路验证 → ② 卖断货日报 → ③ 爆卖日报 → ④ 热品预判缺货（③）→ ⑤ 供货缺货日报（④）→ ⑥ 看板 `dashboard.html` |
 
 - ④ 的标准命令（定时任务与本机验证都用这一条）：
   ```
   cd 06_产品化-SKILL
   python3 scripts/report_supply_short.py --config /home/user/.qpwy_bot/ecommerce_bot.yaml     --outdir ../04_样板案例/QPWY/04_报表-供货缺货/日报
+  ```
+- 看板的标准命令（放在四表全跑完之后，缺表也能出页）：
+  ```
+  cd 06_产品化-SKILL
+  python3 scripts/render_dashboard.py --date <YYYYMMDD>     --out ../04_样板案例/QPWY/06_看板/dashboard.html
   ```
 - 固定配置 `/home/user/.qpwy_bot/ecommerce_bot.yaml`（`chmod 600`，含只读凭据；**文件名必须叫 `ecommerce_bot.yaml`**，`load_config` 会校验文件名；放家目录避免误入仓库）：**只在本机使用**，禁止写入仓库、禁止外发、禁止粘进对话。定时任务不依赖 `/tmp` 临时文件，配置必须落在这个固定路径。
 - 报表跑完必须交叉核对：④ 商品集合 ⊆ 当日卖断货名单（越界 0）、档位 0 差异；对不上就停，不交付。
@@ -360,6 +385,7 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 | 业务知识层 | `references/free-qa/knowledge.md` | 能力边界、业务常识、做不了的领域 | 高（老板每说一条新常识就加这里） |
 | 老板规则层 | `references/boss-rules/` | 老板口述规则（口径类 / 说法类 / 待确认），靠状态机控制生效 | 高（老板每说一条新规则先进待确认） |
 | 样式层 | `references/style-contract.md` | 四表色板/字体/布局/列宽 | 极低（锁死，不许改） |
+| 业务白话层 | `references/business-speak/` | 采购/收货/预约的字段白话与叫法（已核库） | 中（业务侧订正说法时更新，字段结论改一次核一次库） |
 
 **新增内容的落点**：
 
@@ -370,6 +396,7 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 | 新的问法 / 话术 / 禁词 | `references/free-qa/strategy.md` |
 | 新的「不能承诺」边界 | `references/free-qa/gate.md` 第五节 |
 | 新的字段可用性结论（这个库有什么） | `references/free-qa/knowledge.md` 第一节能力边界 |
+| 采购/收货/订货字段的白话与叫法 | `references/business-speak/采购收货-业务字段白话.md`（先只读核库，再改本文件与 SKILL 正文） |
 | 老板口述的**口径类**规则（怎么算、什么算） | `references/boss-rules/待确认.md` → 确认后转 `口径类.md` |
 | 老板口述的**说法类**规则（怎么叫、忌什么词） | `references/boss-rules/待确认.md` → 确认后转 `说法类.md` |
 | 新建一个独立 SKILL 模块 | 先查根目录 `SKILL_REGISTRY.md` + 跑 `python3 tools/check_skill_conflict.py`，登记后才装 |
@@ -397,7 +424,9 @@ description: 触发场景：用户提到「QPWY机器人」「你是哪个机器
 | `sql_templates/hot_sale.yaml` | ② 双榜口径 |
 | `sql_templates/predict.yaml` | ③ 预警口径 |
 | `sql_templates/supply_short.yaml` | ④ 供商口径（不改 soldout.yaml） |
+| `scripts/render_dashboard.py` | 每日看板出页器（读四表当日 JSON → `dashboard.html`，版式锁死） |
 | `references/style-contract.md` | 四表样式契约（微软雅黑/色板/布局/列宽） |
+| `references/business-speak/采购收货-业务字段白话.md` | 采购单/收货单/预约字段白话（2026-11-23 核库版，含 4 条易错项） |
 | `references/free-qa/gate.md` | 自由问答决策闸门（三问 + 三类出口 + 红线 + 可替换性验收） |
 | `references/free-qa/strategy.md` | 自由问答说话策略（路由 / 筛选边界 / 反问 / 禁词 / 风格） |
 | `references/free-qa/knowledge.md` | 自由问答业务知识（能力边界 / 五条业务常识） |

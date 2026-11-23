@@ -71,7 +71,7 @@ FROM {item_provider} p
 WHERE p.status = 1
   AND p.provider_id IN ({provider_ids});
 ```
-> provider_id=0 或查无行 → 标「未映射供应商」。
+> provider_id=0 或查无行 → 标「自营（没有供商）」。
 
 ## 等级与名单规则（固化，来自 v1.4）
 
