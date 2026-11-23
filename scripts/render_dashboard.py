@@ -255,9 +255,9 @@ def build(date, root):
                         num(r.get("cover")), num(r.get("daily")), esc(r.get("est_out")))
                      for r in rows]
         heat_card = card("③ 热品预判缺货", "哪些热品快断，得提前下单",
-                         "P0 今天就可能断（≤1 天），P1 ≤2 天；这批是采购当天要处理的单。",
+                         "P0 ≤2 天立刻对接，P1 3~5 天本周下单；这批是采购当天要处理的单。",
                          [(sum(cnt.values()) if cnt else len(d3.get("rows") or []), "预警总数"),
-                          (cnt.get("P0") or 0, "P0 ≤1 天"), (cnt.get("P1") or 0, "P1 ≤2 天")],
+                          (cnt.get("P0") or 0, "P0 ≤2 天"), (cnt.get("P1") or 0, "P1 3~5 天")],
                          dist_block([("P0", cnt.get("P0") or 0, "A"),
                                      ("P1", cnt.get("P1") or 0, "B"),
                                      ("P2", cnt.get("P2") or 0, "C"),

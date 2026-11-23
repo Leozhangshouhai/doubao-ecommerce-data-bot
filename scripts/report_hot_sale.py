@@ -17,11 +17,15 @@
 import argparse
 import json
 import os
+import re
 import socket
 import sys
 import threading
 import time
 from datetime import date, datetime, timedelta
+
+# 供商列统一文案：provider_id=0/空 一律标「自营」（与 ①③ 同口径，交付方封板 2026-11-19）
+SELF_OP_NAME = "自营"
 
 ARGS = None
 
@@ -299,7 +303,8 @@ GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%%Y-%%m')""".fo
         if pids:
             for pid, pname in db.q("goods", "SELECT provider_id, provider_name FROM %s WHERE status=1 AND provider_id IN (%s)" % (
                     tables["item_provider"], ",".join(str(x) for x in pids)), "供商名"):
-                provs[int(pid)] = pname or ""
+                # 去「（云仓）/(云仓)」后缀，与 ①③ 口径一致（全角/半角混写，用正则）
+                provs[int(pid)] = re.sub(r"[（(]\s*云仓\s*[)）]", "", str(pname or "")).strip()
         print("[7/7] 分类 %d｜供商 %d" % (len(cats), len(provs)))
     finally:
         db.close()
@@ -353,7 +358,7 @@ GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%%Y-%%m')""".fo
         out5 = sum(out_by_day[-5:]) if len(out_by_day) >= 5 else sum(out_by_day)
         rec = {
             "item_id": iid, "name": meta["name"], "provider_id": pid,
-            "provider_name": provs.get(pid, ""),
+            "provider_name": SELF_OP_NAME if not pid else (provs.get(pid, "") or SELF_OP_NAME),
             "fname": cats.get(iid, ""),
             "flow": "流通" if cats.get(iid, "") in flow_cats else "非流通",
             "qty_7d": int(q7), "avg_3d": a3, "acc": acc, "rise_days": rise,
