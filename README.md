@@ -29,7 +29,7 @@
 
 ### 本机运维任务（开发侧）
 
-每天 **10:00（Asia/Shanghai，云电脑）** 一条任务跑：数据链路验证 → ① 卖断货 → ② 爆卖 → ③ 热品预判缺货 → ④ 供货缺货，四张 XLSX 交付、JSON 留档。固定配置 `/home/user/.qpwy_bot/ecommerce_bot.yaml`（`chmod 600`，文件名为硬约束，不入库、不外发）。
+每天 **08:00（Asia/Shanghai，云电脑）** 一条任务跑：数据链路验证 → ① 卖断货 → ② 爆卖 → ③ 热品预判缺货 → ④ 供货缺货，四张 XLSX + 当日看板 HTML 交付、JSON 留档。固定配置 `/home/user/.qpwy_bot/ecommerce_bot.yaml`（`chmod 600`，文件名为硬约束，不入库、不外发）。
 
 ## 快速开始
 
