@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 from datetime import date, datetime, timedelta
+from monthly_cache import load_monthly_items, max_month_amt
 
 # 供商列统一文案：provider_id=0/空 一律标「自营」（与 ①③ 同口径，交付方封板 2026-11-19）
 SELF_OP_NAME = "自营"
@@ -265,23 +266,29 @@ GROUP BY od.sku_code, DATE(FROM_UNIXTIME(oh.order_time))""".format(
             invmap[(int(iid), int(pid or 0), str(d))] = (float(tq or 0), int(so_flag or 0))
         print("[5/7] 库存快照行 %d" % len(invmap))
 
-        # 5) 月销（自然年，取最高月）
+        # 5) 月销（自然年，取最高月；优先复用①本地月销缓存，未命中再现查兜底）
         y0 = date(int(target[:4]), 1, 1)
         ts_y = int(datetime(y0.year, y0.month, y0.day).timestamp()) - 8 * 3600
-        sql2 = """SELECT od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%%Y-%%m') AS m,
+        amt = {}
+        mc = load_monthly_items(year=int(target[:4]))
+        if mc:
+            for iid in items.keys():
+                amt[iid] = max_month_amt(mc, iid)
+            print("[6/7] 月销命中本地缓存，有月销商品 %d" % sum(1 for v in amt.values() if v > 0))
+        else:
+            sql2 = """SELECT od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%%Y-%%m') AS m,
        SUM(od.price * od.quantity) AS amt
 FROM {od} od JOIN {oh} oh ON od.order_code = oh.order_code
 WHERE oh.valid = 1 AND oh.order_time >= {ts}
 GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time), '%%Y-%%m')""".format(
-            od=tables["order_detail"], oh=tables["order_head"], ts=ts_y)
-        amt = {}
-        for code, m, v in db.q("order", sql2.replace("%%", "%"), "月销"):
-            try:
-                iid = int(code)
-            except Exception:
-                continue
-            amt[iid] = max(amt.get(iid, 0.0), float(v or 0))
-        print("[6/7] 有月销商品 %d" % len(amt))
+                od=tables["order_detail"], oh=tables["order_head"], ts=ts_y)
+            for code, m, v in db.q("order", sql2.replace("%%", "%"), "月销"):
+                try:
+                    iid = int(code)
+                except Exception:
+                    continue
+                amt[iid] = max(amt.get(iid, 0.0), float(v or 0))
+            print("[6/7] 月销缓存缺失，兜底现查；有月销商品 %d" % len(amt))
 
         # 6) 分类 + 供商名
         ids = ",".join(str(x) for x in items.keys())

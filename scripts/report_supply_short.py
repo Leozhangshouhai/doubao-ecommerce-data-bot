@@ -22,6 +22,9 @@ import sys
 import threading
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from monthly_cache import load_monthly_items, max_month_amt
+
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -675,23 +678,28 @@ def main():
         ids = [s["item_id"] for s in sold_base]
         year_start = newer[:4] + "-01-01"
         year_since = int(time.mktime(time.strptime(year_start, "%Y-%m-%d")))
-        for i in range(0, len(ids), 400):
-            chunk = ids[i:i + 400]
-            if not chunk:
-                continue
-            ph = ",".join("'%s'" % x for x in chunk)
-            sql = ("SELECT od.sku_code, SUM(od.price*od.quantity) "
-                   "FROM %s od JOIN %s oh ON od.order_code=oh.order_code "
-                   "WHERE od.sku_code IN (%s) AND oh.order_time>=%s AND oh.valid=1 "
-                   "GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time),'%%Y-%%m')" % (
-                       tables["order_detail"], tables["order_head"], ph, year_since))
-            for item_id, amt in db.q("order", sql):
-                try:
-                    key = int(item_id)
-                except (TypeError, ValueError):
-                    key = item_id
-                monthly[key] = max(monthly.get(key, 0.0), float(amt or 0))
-        print("[4/6] 月销 %d 个有销售" % len(monthly))
+        mc = load_monthly_items(year=int(newer[:4]))
+        if mc is not None:
+            monthly = {sid: max_month_amt(mc, sid) for sid in ids}
+            print("[4/6] 月销命中本地缓存，有月销商品 %d" % sum(1 for v in monthly.values() if v > 0))
+        else:
+            for i in range(0, len(ids), 400):
+                chunk = ids[i:i + 400]
+                if not chunk:
+                    continue
+                ph = ",".join("'%s'" % x for x in chunk)
+                sql = ("SELECT od.sku_code, SUM(od.price*od.quantity) "
+                       "FROM %s od JOIN %s oh ON od.order_code=oh.order_code "
+                       "WHERE od.sku_code IN (%s) AND oh.order_time>=%s AND oh.valid=1 "
+                       "GROUP BY od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time),'%%Y-%%m')" % (
+                           tables["order_detail"], tables["order_head"], ph, year_since))
+                for item_id, amt in db.q("order", sql):
+                    try:
+                        key = int(item_id)
+                    except (TypeError, ValueError):
+                        key = item_id
+                    monthly[key] = max(monthly.get(key, 0.0), float(amt or 0))
+            print("[4/6] 月销缓存缺失，兜底现查；有月销商品 %d" % len(monthly))
 
         sold_skus = []
         for s in sold_base:

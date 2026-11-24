@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from report_hot_sale import DB   # 复用同一套跳板机隧道与只读查询封装
 from report_soldout import grade_of   # 复用 ① 的 A/B/C/D 等级口径，四张表统一
+from monthly_cache import load_monthly_items, max_month_amt
 
 
 def main():
@@ -238,18 +239,25 @@ GROUP BY item_id, provider_id"""
         grade_th = {"流通": so["grade"]["flow"], "非流通": so["grade"]["non_flow"]}
         monthly = {}
         gids = [str(r["item_id"]) for r in rows]
-        for gi in range(0, len(gids), 400):
-            ph = ",".join(["'%s'" % x for x in gids[gi:gi + 400]])
-            msql = ("SELECT od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time),'%%Y-%%m') ym, "
-                    "SUM(od.price*od.quantity) FROM {od} od JOIN {oh} oh ON od.order_code=oh.order_code "
-                    "WHERE od.sku_code IN (%s) AND oh.order_time >= %d AND oh.valid=1 "
-                    "GROUP BY od.sku_code, ym" % (ph, year_since))
-            for code, ym, amt in db.q("order", msql.format(od=tables["order_detail"],
-                                                           oh=tables["order_head"]), "月销额"):
-                monthly.setdefault(str(code), {})[ym] = float(amt or 0)
+        mc = load_monthly_items(year=int(target.split("-")[0]))
+        if mc is None:
+            for gi in range(0, len(gids), 400):
+                ph = ",".join(["'%s'" % x for x in gids[gi:gi + 400]])
+                msql = ("SELECT od.sku_code, DATE_FORMAT(FROM_UNIXTIME(oh.order_time),'%%Y-%%m') ym, "
+                        "SUM(od.price*od.quantity) FROM {od} od JOIN {oh} oh ON od.order_code=oh.order_code "
+                        "WHERE od.sku_code IN (%s) AND oh.order_time >= %d AND oh.valid=1 "
+                        "GROUP BY od.sku_code, ym" % (ph, year_since))
+                for code, ym, amt in db.q("order", msql.format(od=tables["order_detail"],
+                                                               oh=tables["order_head"]), "月销额"):
+                    monthly.setdefault(str(code), {})[ym] = float(amt or 0)
+        else:
+            print("[7/7] 月销命中本地缓存，跳过订单库月销 JOIN")
         for r in rows:
-            ms = monthly.get(str(r["item_id"]), {})
-            r["max_month_amt"] = round(max(ms.values()), 2) if ms else 0.0
+            if mc is not None:
+                r["max_month_amt"] = round(max_month_amt(mc, r["item_id"]), 2)
+            else:
+                ms = monthly.get(str(r["item_id"]), {})
+                r["max_month_amt"] = round(max(ms.values()), 2) if ms else 0.0
             r["grade"] = grade_of(r["max_month_amt"], r["flow"], grade_th)
         print("[7/7] ABCD 等级：%s" % {g: sum(1 for r in rows if r["grade"] == g)
                                    for g in ("A", "B", "C", "D")})
